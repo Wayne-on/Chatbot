@@ -4,7 +4,7 @@ from customer_service_agent.router import (
     extract_waybill,
     normalize_waybill,
 )
-from customer_service_agent.schemas import Intent, SceneStatus
+from customer_service_agent.schemas import Intent, IntentRelation, SceneStatus
 from customer_service_agent.state import ConversationState
 
 
@@ -60,3 +60,28 @@ def test_switch_and_cancel_are_both_detected() -> None:
     assert decision.cancel_requested is True
     assert decision.intent == Intent.TRACKING
     assert decision.explicit_intent is True
+
+
+def test_multi_intents_are_kept_in_user_mention_order() -> None:
+    decision = Router().route(
+        "我要查快递和改地址",
+        requested_language="zh-CN",
+        state=ConversationState(),
+    )
+
+    assert decision.intent == Intent.TRACKING
+    assert decision.secondary_intents == [Intent.CHANGE_ADDRESS]
+    assert decision.intent_relation == IntentRelation.PARALLEL
+
+
+def test_negated_multi_intent_requires_semantic_resolution() -> None:
+    decision = Router().route(
+        "我不是要投诉，只想查快递",
+        requested_language="zh-CN",
+        state=ConversationState(),
+    )
+
+    assert decision.intent == Intent.COMPLAINT
+    assert decision.secondary_intents == [Intent.TRACKING]
+    assert decision.intent_relation == IntentRelation.CORRECTION
+    assert decision.semantic_conflict is True

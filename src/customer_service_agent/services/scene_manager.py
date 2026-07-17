@@ -5,9 +5,15 @@ from customer_service_agent.state import ConversationState
 
 
 class SceneManager:
-    def activate(self, state: ConversationState, intent: Intent) -> None:
+    def activate(
+        self,
+        state: ConversationState,
+        intent: Intent,
+        *,
+        preserve_pending_intents: bool = False,
+    ) -> None:
         if state.current_intent != intent:
-            state.reset_scene()
+            state.reset_scene(preserve_pending_intents=preserve_pending_intents)
             state.current_intent = intent
         elif state.scene_status in {SceneStatus.COMPLETED, SceneStatus.CANCELLED}:
             state.scene_status = SceneStatus.IDLE

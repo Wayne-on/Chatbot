@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from customer_service_agent.schemas import Intent
+
 TRACKING_STATUS_LABELS = {
     "zh": {
         "in_transit": "运输中",
@@ -64,6 +66,49 @@ TRACKING_ETA_LABELS = {
         "delayed": "Tracking has not updated for more than 48 hours, so a follow-up can be requested.",
         "exception": "The outlet needs to verify the exception further.",
     },
+}
+
+INTENT_LABELS = {
+    "zh": {
+        Intent.TRACKING: "查询物流",
+        Intent.PACKAGE_VOLUME: "查询包裹体积",
+        Intent.DELIVERY_FOLLOWUP: "处理催件",
+        Intent.DELIVERED_NOT_RECEIVED: "处理签收未收到",
+        Intent.CHANGE_ADDRESS: "处理修改地址",
+        Intent.COMPLAINT: "处理投诉/理赔",
+        Intent.QUERY_COMPLAINT: "查询工单进度",
+        Intent.FAQ: "查询物流规则",
+    },
+    "vi": {
+        Intent.TRACKING: "tra cứu hành trình",
+        Intent.PACKAGE_VOLUME: "tra cứu kích thước kiện hàng",
+        Intent.DELIVERY_FOLLOWUP: "xử lý yêu cầu giục giao",
+        Intent.DELIVERED_NOT_RECEIVED: "xử lý kiện đã giao nhưng chưa nhận",
+        Intent.CHANGE_ADDRESS: "xử lý đổi địa chỉ",
+        Intent.COMPLAINT: "xử lý khiếu nại/bồi thường",
+        Intent.QUERY_COMPLAINT: "tra cứu tiến độ phiếu",
+        Intent.FAQ: "tra cứu quy định vận chuyển",
+    },
+    "en": {
+        Intent.TRACKING: "check tracking",
+        Intent.PACKAGE_VOLUME: "check package dimensions",
+        Intent.DELIVERY_FOLLOWUP: "handle a delivery follow-up",
+        Intent.DELIVERED_NOT_RECEIVED: "handle a delivered-not-received report",
+        Intent.CHANGE_ADDRESS: "handle an address change",
+        Intent.COMPLAINT: "handle a complaint or claim",
+        Intent.QUERY_COMPLAINT: "check ticket progress",
+        Intent.FAQ: "check shipping policy",
+    },
+}
+
+ADDRESS_REASON_LABELS = {
+    "zh": {
+        "Current logistics status does not support direct address changes": "当前物流状态不支持直接改址",
+    },
+    "vi": {
+        "Current logistics status does not support direct address changes": "Trạng thái vận chuyển hiện tại không hỗ trợ đổi địa chỉ trực tiếp",
+    },
+    "en": {},
 }
 
 TEMPLATES: dict[str, dict[str, str]] = {
@@ -220,6 +265,73 @@ class ResponseService:
         eta = TRACKING_ETA_LABELS[language].get(status_code, str(data.get("eta") or ""))
         return {"status": status, "node": node, "eta": eta}
 
+    def address_unavailable_values(self, language: str, data: dict[str, Any]) -> dict[str, str]:
+        language = language if language in {"en", "vi", "zh"} else "en"
+        status_code = str(data.get("current_status") or "unknown")
+        reason_code = str(data.get("reason") or "")
+        return {
+            "status": TRACKING_STATUS_LABELS[language].get(status_code, status_code),
+            "reason": ADDRESS_REASON_LABELS[language].get(reason_code, reason_code),
+        }
+
+    def planned_prompt(
+        self,
+        language: str,
+        primary: Intent,
+        pending: list[Intent],
+        next_prompt: str,
+    ) -> str:
+        """Acknowledge every recognized goal while keeping one authoritative next step."""
+        language = language if language in {"en", "vi", "zh"} else "en"
+        labels = INTENT_LABELS[language]
+        primary_label = labels.get(primary, primary.value)
+        pending_labels = [labels.get(intent, intent.value) for intent in pending]
+        if not pending_labels:
+            return next_prompt
+        if language == "zh":
+            return (
+                f"好的，我会先为您{primary_label}，然后继续为您"
+                f"{'、'.join(pending_labels)}。{next_prompt}"
+            )
+        if language == "vi":
+            return (
+                f"Được, tôi sẽ {primary_label} trước, sau đó "
+                f"{' và '.join(pending_labels)}. {next_prompt}"
+            )
+        return f"I’ll {primary_label} first, then {' and '.join(pending_labels)}. {next_prompt}"
+
+    def semantic_clarification(self, language: str, intents: list[Intent]) -> str:
+        """Conservative fallback when a negated or conflicting request cannot reach the model."""
+        language = language if language in {"en", "vi", "zh"} else "en"
+        labels = INTENT_LABELS[language]
+        names = [labels.get(intent, intent.value) for intent in intents]
+        if language == "zh":
+            mentioned = "、".join(names) if names else "多个处理方向"
+            return (
+                f"我注意到您提到了{mentioned}，但其中有否定或更正。请明确告诉我这次要处理哪一项。"
+            )
+        if language == "vi":
+            mentioned = " và ".join(names) if names else "nhiều yêu cầu"
+            return (
+                f"Tôi thấy bạn đề cập đến {mentioned}, nhưng có nội dung phủ định hoặc sửa lại. "
+                "Vui lòng xác nhận yêu cầu cần xử lý lần này."
+            )
+        mentioned = " and ".join(names) if names else "multiple possible requests"
+        return (
+            f"I noticed {mentioned}, but the message also contains a negation or correction. "
+            "Please confirm which request you want handled now."
+        )
+
+    def intent_choice(self, language: str, intents: list[Intent]) -> str:
+        language = language if language in {"en", "vi", "zh"} else "en"
+        labels = INTENT_LABELS[language]
+        names = [labels.get(intent, intent.value) for intent in intents]
+        if language == "zh":
+            return f"您提到了{'和'.join(names)}。请确认这次希望先处理哪一项。"
+        if language == "vi":
+            return f"Bạn đã đề cập đến {' và '.join(names)}. Vui lòng chọn yêu cầu cần xử lý trước."
+        return f"You mentioned {' and '.join(names)}. Please confirm which one to handle first."
+
     def conversation_reply(
         self,
         language: str,
@@ -246,9 +358,7 @@ class ResponseService:
             )
         )
         if asks_memory:
-            return self._identifier_history_reply(
-                language, waybill_history, last_valid_waybill
-            )
+            return self._identifier_history_reply(language, waybill_history, last_valid_waybill)
 
         praise = any(
             marker in lower
@@ -293,7 +403,9 @@ class ResponseService:
 
         if last_ticket_id:
             if language == "zh":
-                return f"我在。最近的工单是 {last_ticket_id}；您可以直接问我工单进度或继续说明问题。"
+                return (
+                    f"我在。最近的工单是 {last_ticket_id}；您可以直接问我工单进度或继续说明问题。"
+                )
             if language == "vi":
                 return f"Tôi vẫn ở đây. Phiếu gần nhất là {last_ticket_id}; bạn có thể hỏi tiến độ hoặc nói rõ thêm vấn đề."
             return f"I’m here. Your latest ticket is {last_ticket_id}; ask me for its status or tell me what else you need."
@@ -324,22 +436,14 @@ class ResponseService:
         joined = "、".join(waybill_history)
         count = len(waybill_history)
         if language == "zh":
-            latest = (
-                f"最近一次有效查询的是 {last_valid_waybill}。"
-                if last_valid_waybill
-                else ""
-            )
+            latest = f"最近一次有效查询的是 {last_valid_waybill}。" if last_valid_waybill else ""
             return f"记得。您在本次会话里一共提供过 {count} 个不同的单号：{joined}。{latest}"
         if language == "vi":
-            latest = (
-                f" Mã hợp lệ gần nhất là {last_valid_waybill}."
-                if last_valid_waybill
-                else ""
-            )
+            latest = f" Mã hợp lệ gần nhất là {last_valid_waybill}." if last_valid_waybill else ""
             return f"Tôi nhớ. Bạn đã cung cấp {count} mã khác nhau trong cuộc trò chuyện này: {joined}.{latest}"
         latest = (
-            f" The most recent valid one is {last_valid_waybill}."
-            if last_valid_waybill
-            else ""
+            f" The most recent valid one is {last_valid_waybill}." if last_valid_waybill else ""
         )
-        return f"Yes. You provided {count} different waybills in this conversation: {joined}.{latest}"
+        return (
+            f"Yes. You provided {count} different waybills in this conversation: {joined}.{latest}"
+        )

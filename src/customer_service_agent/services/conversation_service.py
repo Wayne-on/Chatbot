@@ -13,6 +13,8 @@ from customer_service_agent.schemas import (
     ChatRequest,
     ChatResponse,
     Intent,
+    IntentRelation,
+    PendingIntent,
     RequestContext,
     RouteDecision,
     SceneStatus,
@@ -66,9 +68,7 @@ class ConversationService:
             | None
         ) = None
         self.response_generator: (
-            Callable[
-                [str, ConversationState, ChatResponse, RequestContext], Awaitable[str | None]
-            ]
+            Callable[[str, ConversationState, ChatResponse, RequestContext], Awaitable[str | None]]
             | None
         ) = None
 
@@ -99,37 +99,71 @@ class ConversationService:
                 assert self.model_router is not None
                 model_decision = await self.model_router(request.message, state, context)
                 if model_decision is not None and not (
-                    model_decision.intent == Intent.FALLBACK and rule_decision.intent is not None
+                    model_decision.intent == Intent.FALLBACK
+                    and rule_decision.intent is not None
+                    and not rule_decision.secondary_intents
+                    and not rule_decision.semantic_conflict
                 ):
                     decision = model_decision.model_copy(
                         update={
+                            "semantic_conflict": rule_decision.semantic_conflict,
                             # Deterministic confirmation/cancellation detection is authoritative.
                             "cancel_requested": (
-                                rule_decision.cancel_requested
+                                model_decision.cancel_requested
+                                if rule_decision.semantic_conflict
+                                else rule_decision.cancel_requested
                                 or model_decision.cancel_requested
                             ),
                             "confirmation": rule_decision.confirmation,
                             "rejection": rule_decision.rejection,
                             "human_requested": (
-                                rule_decision.human_requested
-                                or model_decision.human_requested
+                                model_decision.human_requested
+                                if rule_decision.semantic_conflict
+                                else rule_decision.human_requested or model_decision.human_requested
                             ),
                             # Regex-validated identifiers remain a deterministic fallback.
-                            "waybill_no": (
-                                model_decision.waybill_no or rule_decision.waybill_no
-                            ),
+                            "waybill_no": (model_decision.waybill_no or rule_decision.waybill_no),
                             "phone_last4": (
                                 model_decision.phone_last4 or rule_decision.phone_last4
                             ),
-                            "ticket_id": (
-                                model_decision.ticket_id or rule_decision.ticket_id
-                            ),
+                            "ticket_id": (model_decision.ticket_id or rule_decision.ticket_id),
                             "new_address": (
                                 model_decision.new_address or rule_decision.new_address
                             ),
                             "invalid_waybill_no": rule_decision.invalid_waybill_no,
                         }
                     )
+                elif model_decision is None and rule_decision.semantic_conflict:
+                    mentioned = [
+                        intent
+                        for intent in [
+                            rule_decision.intent,
+                            *rule_decision.secondary_intents,
+                        ]
+                        if intent is not None
+                    ]
+                    decision = RouteDecision(
+                        intent=Intent.FALLBACK,
+                        language=rule_decision.language,
+                        clarify_question=self.responses.semantic_clarification(
+                            rule_decision.language,
+                            mentioned,
+                        ),
+                    )
+            elif rule_decision.semantic_conflict and self.model_router is None:
+                mentioned = [
+                    intent
+                    for intent in [rule_decision.intent, *rule_decision.secondary_intents]
+                    if intent is not None
+                ]
+                decision = RouteDecision(
+                    intent=Intent.FALLBACK,
+                    language=rule_decision.language,
+                    clarify_question=self.responses.semantic_clarification(
+                        rule_decision.language,
+                        mentioned,
+                    ),
+                )
             state.language = decision.language
             existing_waybill = state.slots.get("waybill_no") or state.last_waybill_no
             if (
@@ -166,7 +200,29 @@ class ConversationService:
                 state.owner_hash = owner_hash
                 state.language = decision.language
 
-            if decision.cancel_requested and not is_switch:
+            self._update_pending_intents(state, decision, request.message)
+
+            if (
+                decision.intent_relation == IntentRelation.ALTERNATIVE
+                and decision.secondary_intents
+            ):
+                choices = [
+                    intent
+                    for intent in [decision.intent, *decision.secondary_intents]
+                    if intent is not None
+                ]
+                state.reset_scene()
+                state.current_intent = Intent.FALLBACK
+                state.language = decision.language
+                self.scenes.collect(state, "waiting_intent")
+                response = self._response(
+                    state,
+                    trace_id,
+                    self.responses.intent_choice(state.language, choices),
+                    action_required="choose_intent",
+                    data={"intent_choices": [intent.value for intent in choices]},
+                )
+            elif decision.cancel_requested and not is_switch:
                 state.reset_scene(status=SceneStatus.CANCELLED)
                 response = self._response(
                     state, trace_id, self.responses.render(state.language, "cancelled")
@@ -188,11 +244,15 @@ class ConversationService:
                     state, decision, context, request.message
                 )
             elif state.active and decision.intent == Intent.CONVERSATION:
-                response = self._active_conversation(
-                    state, context.trace_id, request.message
-                )
+                response = self._active_conversation(state, context.trace_id, request.message)
             else:
                 response = await self._dispatch(state, decision, context, request.message)
+
+            response = await self._advance_pending_intents(
+                state,
+                response,
+                context,
+            )
 
             if (
                 self.response_generator is not None
@@ -224,11 +284,14 @@ class ConversationService:
     ) -> bool:
         if self.model_router is None:
             return False
-        if rule_decision.cancel_requested or rule_decision.human_requested:
+        if rule_decision.invalid_waybill_no:
             return False
+        if rule_decision.secondary_intents or rule_decision.semantic_conflict:
+            # Natural-language multi-intent, negation, and correction need contextual semantics.
+            return True
         if state.scene_status == SceneStatus.WAITING_CONFIRMATION:
             return False
-        if rule_decision.invalid_waybill_no:
+        if rule_decision.cancel_requested or rule_decision.human_requested:
             return False
         if rule_decision.explicit_intent:
             # High-confidence keyword/phrase routes stay useful even during a model outage.
@@ -246,6 +309,116 @@ class ConversationService:
 
         return self.settings.model_routing_mode == "new_scene" or rule_decision.intent is None
 
+    @staticmethod
+    def _update_pending_intents(
+        state: ConversationState,
+        decision: RouteDecision,
+        message: str,
+    ) -> None:
+        if decision.intent_relation == IntentRelation.ALTERNATIVE:
+            state.pending_intents = []
+            return
+        if decision.secondary_intents:
+            seen = {decision.intent}
+            state.pending_intents = []
+            for intent in decision.secondary_intents:
+                if intent in seen or intent in {Intent.CONVERSATION, Intent.FALLBACK}:
+                    continue
+                seen.add(intent)
+                state.pending_intents.append(
+                    PendingIntent(
+                        intent=intent,
+                        relation=decision.intent_relation,
+                        source_message=message[:1000],
+                        condition=decision.intent_condition,
+                        phone_last4=(
+                            decision.phone_last4
+                            if intent == Intent.DELIVERED_NOT_RECEIVED
+                            else None
+                        ),
+                        ticket_id=(
+                            decision.ticket_id if intent == Intent.QUERY_COMPLAINT else None
+                        ),
+                        new_address=(
+                            decision.new_address if intent == Intent.CHANGE_ADDRESS else None
+                        ),
+                    )
+                )
+            return
+        if decision.semantic_conflict or decision.intent_relation == IntentRelation.CORRECTION:
+            state.pending_intents = []
+
+    async def _advance_pending_intents(
+        self,
+        state: ConversationState,
+        response: ChatResponse,
+        context: RequestContext,
+    ) -> ChatResponse:
+        """Advance recognized goals sequentially while retaining one authoritative active scene."""
+        if response.status != SceneStatus.COMPLETED or response.action_required is not None:
+            return response
+        if not state.pending_intents:
+            return response
+
+        results = [
+            {
+                "intent": response.current_intent.value if response.current_intent else None,
+                "data": response.data,
+            }
+        ]
+        replies = [response.reply]
+        next_response = response
+
+        while (
+            next_response.status == SceneStatus.COMPLETED
+            and next_response.action_required is None
+            and state.pending_intents
+        ):
+            pending = state.pending_intents.pop(0)
+            decision = RouteDecision(
+                intent=pending.intent,
+                language=state.language,
+                waybill_no=(state.last_waybill_no if pending.intent in WAYBILL_INTENTS else None),
+                ticket_id=(
+                    pending.ticket_id or state.last_ticket_id
+                    if pending.intent == Intent.QUERY_COMPLAINT
+                    else None
+                ),
+                phone_last4=pending.phone_last4,
+                new_address=pending.new_address,
+                explicit_intent=True,
+                continuation=False,
+                intent_relation=pending.relation,
+                intent_condition=pending.condition,
+                business_reason=pending.source_message,
+            )
+            next_response = await self._dispatch(
+                state,
+                decision,
+                context,
+                pending.source_message,
+            )
+            replies.append(next_response.reply)
+            results.append(
+                {
+                    "intent": (
+                        next_response.current_intent.value if next_response.current_intent else None
+                    ),
+                    "data": next_response.data,
+                }
+            )
+            next_response = next_response.model_copy(
+                update={
+                    "reply": " ".join(replies),
+                    "data": {
+                        "results": results,
+                        "pending_intents": [item.intent.value for item in state.pending_intents],
+                    },
+                }
+            )
+
+        return next_response
+
     async def _dispatch(
         self,
         state: ConversationState,
@@ -254,7 +427,7 @@ class ConversationService:
         message: str,
     ) -> ChatResponse:
         intent = decision.intent or Intent.FALLBACK
-        self.scenes.activate(state, intent)
+        self.scenes.activate(state, intent, preserve_pending_intents=True)
         if decision.waybill_no:
             state.slots["waybill_no"] = decision.waybill_no
             state.remember_waybill(decision.waybill_no)
@@ -475,11 +648,14 @@ class ConversationService:
         state.last_tool_result = check.data
         if not check.data.get("can_change"):
             self.scenes.complete(state)
+            address_values = self.responses.address_unavailable_values(
+                state.language,
+                check.data,
+            )
             reply = self.responses.render(
                 state.language,
                 "address_unavailable",
-                status=check.data.get("current_status"),
-                reason=check.data.get("reason"),
+                **address_values,
             )
             return self._response(state, context.trace_id, reply, data=check.data)
         new_address = state.slots.get("new_address")
@@ -705,6 +881,7 @@ class ConversationService:
     ) -> ChatResponse:
         if decision.rejection or decision.cancel_requested:
             state.pending_confirmation = None
+            state.pending_intents = []
             state.scene_status = SceneStatus.CANCELLED
             state.current_step = "action_cancelled"
             return self._response(
@@ -850,11 +1027,14 @@ class ConversationService:
         if not eligibility.data.get("can_change"):
             state.pending_confirmation = None
             self.scenes.complete(state)
+            address_values = self.responses.address_unavailable_values(
+                state.language,
+                eligibility.data,
+            )
             reply = self.responses.render(
                 state.language,
                 "address_unavailable",
-                status=eligibility.data.get("current_status"),
-                reason=eligibility.data.get("reason"),
+                **address_values,
             )
             return self._response(state, context.trace_id, reply)
         result = await self.tools.change_address(
@@ -878,6 +1058,7 @@ class ConversationService:
         self, state: ConversationState, result: ToolResult, context: RequestContext
     ) -> ChatResponse:
         state.retry_count += 1
+        state.pending_intents = []
         state.scene_status = SceneStatus.FAILED
         state.current_step = "retry_tool"
         state.last_tool_result = {
@@ -901,6 +1082,7 @@ class ConversationService:
     ) -> ChatResponse:
         result = await self.tools.transfer_to_human(TransferToHumanInput(reason=reason), context)
         state.pending_confirmation = None
+        state.pending_intents = []
         state.scene_status = SceneStatus.TRANSFER
         state.current_step = "human_queue"
         if result.succeeded:
@@ -924,11 +1106,30 @@ class ConversationService:
 
     def _ask_waybill(self, state: ConversationState, trace_id: str) -> ChatResponse:
         self.scenes.collect(state, "waiting_waybill")
+        reply = self.responses.render(state.language, "ask_waybill")
+        if state.current_intent and state.pending_intents:
+            reply = self.responses.planned_prompt(
+                state.language,
+                state.current_intent,
+                [item.intent for item in state.pending_intents],
+                reply,
+            )
         return self._response(
             state,
             trace_id,
-            self.responses.render(state.language, "ask_waybill"),
+            reply,
             action_required="provide_waybill_no",
+            data={
+                "planned_intents": [
+                    intent.value
+                    for intent in [
+                        state.current_intent,
+                        *[item.intent for item in state.pending_intents],
+                    ]
+                ]
+                if state.current_intent and state.pending_intents
+                else [],
+            },
         )
 
     def _invalid_waybill(
@@ -938,15 +1139,17 @@ class ConversationService:
         candidate: str,
         intent: Intent | None,
     ) -> ChatResponse:
-        self.scenes.activate(state, intent or state.current_intent or Intent.TRACKING)
+        self.scenes.activate(
+            state,
+            intent or state.current_intent or Intent.TRACKING,
+            preserve_pending_intents=True,
+        )
         state.remember_waybill(candidate, valid=False)
         self.scenes.collect(state, "waiting_waybill")
         return self._response(
             state,
             trace_id,
-            self.responses.render(
-                state.language, "invalid_waybill", waybill=candidate
-            ),
+            self.responses.render(state.language, "invalid_waybill", waybill=candidate),
             action_required="provide_waybill_no",
             data={"invalid_waybill_no": candidate},
         )

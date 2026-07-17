@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from customer_service_agent.schemas import Intent, RouteDecision, SceneStatus
+from customer_service_agent.schemas import Intent, IntentRelation, RouteDecision, SceneStatus
 from customer_service_agent.state import ConversationState
 
 WAYBILL_PATTERN = re.compile(r"(?<![A-Z0-9])(JT\d{8,13}|\d{8,15})(?![A-Z0-9])", re.I)
@@ -249,6 +249,66 @@ SOCIAL_INTERJECTIONS = {
     "ừ",
 }
 
+SEMANTIC_CONFLICT_MARKERS = (
+    "不是",
+    "不要",
+    "不想",
+    "先别",
+    "只想",
+    "而是",
+    "但是",
+    "不过",
+    "not ",
+    "don't",
+    "do not",
+    "instead",
+    "but ",
+    "không muốn",
+    "khong muon",
+    "không phải",
+    "khong phai",
+    "nhưng",
+)
+
+
+def _matched_intents(message: str, folded: str) -> list[Intent]:
+    """Return every keyword-matched intent in user-mention order, not rule priority order."""
+    lowered = message.lower()
+    matches: list[tuple[int, int, Intent]] = []
+    for priority, (intent, keywords) in enumerate(INTENT_KEYWORDS):
+        positions: list[int] = []
+        for keyword in keywords:
+            raw_position = lowered.find(keyword.lower())
+            folded_position = folded.find(_fold(keyword))
+            if raw_position >= 0:
+                positions.append(raw_position)
+            if folded_position >= 0:
+                positions.append(folded_position)
+        if positions:
+            matches.append((min(positions), priority, intent))
+    matches.sort(key=lambda item: (item[0], item[1]))
+    return [intent for _, _, intent in matches]
+
+
+def _intent_relation(message: str, folded: str, *, multiple: bool) -> IntentRelation:
+    if not multiple:
+        return IntentRelation.AFTER
+    if any(marker in message or marker in folded for marker in ("不是", "而是", "只想", "instead")):
+        return IntentRelation.CORRECTION
+    if any(
+        marker in message or marker in folded
+        for marker in ("如果", "要是", "if ", "when ", "neu ", "nếu ")
+    ):
+        return IntentRelation.CONDITIONAL
+    if any(marker in message or marker in folded for marker in ("或者", "还是", " or ", "hay ")):
+        return IntentRelation.ALTERNATIVE
+    if any(
+        marker in message or marker in folded
+        for marker in ("然后", "之后", "再帮", "then", "after", "sau do", "sau đó")
+    ):
+        return IntentRelation.AFTER
+    return IntentRelation.PARALLEL
+
 
 class Router:
     """Deterministic first-pass router; all extracted values are validated later by Tools."""
@@ -300,13 +360,16 @@ class Router:
         cancel_markers = ("算了", "取消", "不用了", "cancel", "never mind", "thoi", "huy")
         human_markers = ("人工", "真人", "客服人员", "human agent", "representative", "nhan vien")
         modify_markers = ("改成", "更正", "刚才错", "previous was wrong", "correct it", "sua lai")
+        cancel_requested = any(marker in folded or marker in message for marker in cancel_markers)
+        human_requested = any(marker in folded or marker in message for marker in human_markers)
         modifies_existing = any(marker in folded or marker in message for marker in modify_markers)
 
-        explicit_intent: Intent | None = None
-        for intent, keywords in INTENT_KEYWORDS:
-            if any(keyword in message.lower() or keyword in folded for keyword in keywords):
-                explicit_intent = intent
-                break
+        matched_intents = _matched_intents(message, folded)
+        explicit_intent = matched_intents[0] if matched_intents else None
+        secondary_intents = matched_intents[1:]
+        semantic_conflict = bool(matched_intents or cancel_requested or human_requested) and any(
+            marker in message.lower() or marker in folded for marker in SEMANTIC_CONFLICT_MARKERS
+        )
         if explicit_intent is None and (
             stripped.lower() in SOCIAL_INTERJECTIONS
             or folded in SOCIAL_INTERJECTIONS
@@ -353,20 +416,25 @@ class Router:
 
         return RouteDecision(
             intent=intent,
+            secondary_intents=secondary_intents,
+            intent_relation=_intent_relation(
+                message,
+                folded,
+                multiple=bool(secondary_intents),
+            ),
             language=language,
             waybill_no=waybill,
             invalid_waybill_no=invalid_waybill,
             phone_last4=phone_last4,
             ticket_id=ticket_match.group(0) if ticket_match else None,
             new_address=new_address,
-            cancel_requested=any(
-                marker in folded or marker in message for marker in cancel_markers
-            ),
+            cancel_requested=cancel_requested,
             confirmation=confirmation,
             rejection=rejection,
-            human_requested=any(marker in folded or marker in message for marker in human_markers),
+            human_requested=human_requested,
             modifies_existing=modifies_existing,
             explicit_intent=explicit_intent is not None,
+            semantic_conflict=semantic_conflict,
         )
 
     @staticmethod

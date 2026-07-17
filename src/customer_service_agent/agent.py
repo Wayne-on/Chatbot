@@ -77,8 +77,7 @@ class CustomerServiceAgent:
             state_context = self._safe_conversation_context(state)
             for attempt in range(2):
                 messages = [
-                    {"role": item.role, "content": item.content}
-                    for item in state.recent_messages
+                    {"role": item.role, "content": item.content} for item in state.recent_messages
                 ]
                 messages.append(
                     {
@@ -121,6 +120,9 @@ class CustomerServiceAgent:
             self._model_unavailable_until = 0.0
             return RouteDecision(
                 intent=understanding.intent,
+                secondary_intents=understanding.secondary_intents,
+                intent_relation=understanding.intent_relation,
+                intent_condition=understanding.intent_condition,
                 language=understanding.language,
                 waybill_no=(
                     normalize_waybill(understanding.waybill_no)
@@ -176,14 +178,11 @@ class CustomerServiceAgent:
                 system_prompt += f"\n\nRelevant workflow requirements:\n{skill_text}"
             messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
             messages.extend(
-                {"role": item.role, "content": item.content}
-                for item in state.recent_messages
+                {"role": item.role, "content": item.content} for item in state.recent_messages
             )
             payload = {
                 "language": state.language,
-                "current_intent": (
-                    state.current_intent.value if state.current_intent else None
-                ),
+                "current_intent": (state.current_intent.value if state.current_intent else None),
                 "current_user_message": message,
                 "business_state": self._safe_conversation_context(state),
                 "verified_response_data": response.data,
@@ -388,6 +387,14 @@ class CustomerServiceAgent:
             "current_intent": state.current_intent.value if state.current_intent else None,
             "current_step": state.current_step,
             "scene_status": state.scene_status.value,
+            "pending_intents": [
+                {
+                    "intent": item.intent.value,
+                    "relation": item.relation.value,
+                    "condition": item.condition,
+                }
+                for item in state.pending_intents
+            ],
             "language": state.language,
             "known_slots": {
                 "waybill_no": state.slots.get("waybill_no") or state.last_waybill_no,

@@ -1,6 +1,6 @@
 import asyncio
 
-from customer_service_agent.schemas import Intent, SceneStatus
+from customer_service_agent.schemas import Intent, IntentRelation, PendingIntent, SceneStatus
 from customer_service_agent.state import ConversationState, InMemoryConversationCheckpointer
 
 
@@ -11,11 +11,34 @@ def test_reset_clears_sensitive_scene_slots() -> None:
     )
     state.slots["new_address"] = "123 Example Street, District 1"
     state.slots["phone_last4"] = "1234"
+    state.pending_intents = [
+        PendingIntent(
+            intent=Intent.TRACKING,
+            relation=IntentRelation.AFTER,
+            source_message="then track it",
+        )
+    ]
     state.reset_scene(status=SceneStatus.CANCELLED)
     assert state.current_intent is None
     assert state.slots["new_address"] is None
     assert state.slots["phone_last4"] is None
     assert state.scene_status == SceneStatus.CANCELLED
+    assert state.pending_intents == []
+
+
+def test_scene_transition_can_preserve_pending_intent_queue() -> None:
+    state = ConversationState(current_intent=Intent.TRACKING)
+    state.pending_intents = [
+        PendingIntent(
+            intent=Intent.CHANGE_ADDRESS,
+            relation=IntentRelation.AFTER,
+            source_message="track it and change the address",
+        )
+    ]
+
+    state.reset_scene(preserve_pending_intents=True)
+
+    assert [item.intent for item in state.pending_intents] == [Intent.CHANGE_ADDRESS]
 
 
 def test_recent_history_keeps_latest_six_exchanges_across_scene_reset() -> None:

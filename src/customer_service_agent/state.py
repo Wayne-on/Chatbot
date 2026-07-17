@@ -12,6 +12,7 @@ from customer_service_agent.schemas import (
     ConversationMessage,
     Intent,
     PendingConfirmation,
+    PendingIntent,
     SceneStatus,
 )
 
@@ -42,6 +43,7 @@ class ConversationState(BaseModel):
     scene_context: dict[str, Any] = Field(default_factory=dict)
     last_tool_result: dict[str, Any] | None = None
     pending_confirmation: PendingConfirmation | None = None
+    pending_intents: list[PendingIntent] = Field(default_factory=list)
     retry_count: int = 0
     language: str = "en"
     owner_hash: str | None = None
@@ -59,13 +61,20 @@ class ConversationState(BaseModel):
             SceneStatus.WAITING_CONFIRMATION,
         }
 
-    def reset_scene(self, *, status: SceneStatus = SceneStatus.IDLE) -> None:
+    def reset_scene(
+        self,
+        *,
+        status: SceneStatus = SceneStatus.IDLE,
+        preserve_pending_intents: bool = False,
+    ) -> None:
         self.current_intent = None
         self.current_step = None
         self.scene_status = status
         self.slots = initial_slots()
         self.scene_context = {}
         self.pending_confirmation = None
+        if not preserve_pending_intents:
+            self.pending_intents = []
         self.retry_count = 0
         self.updated_at = datetime.now(UTC)
 

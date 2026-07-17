@@ -150,7 +150,14 @@
 
     if (options.data && Object.keys(options.data).length > 0) {
       const actions = createElement("div", "message-actions");
-      const dataButton = createElement("button", "data-button", "查看 Tool 数据");
+      const planOnly =
+        Array.isArray(options.data.planned_intents) &&
+        Object.keys(options.data).every((key) => key === "planned_intents");
+      const dataButton = createElement(
+        "button",
+        "data-button",
+        planOnly ? "查看处理计划" : "查看 Tool 数据",
+      );
       dataButton.type = "button";
       dataButton.addEventListener("click", () => showData(options.data));
       actions.append(dataButton);

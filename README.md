@@ -2,7 +2,7 @@
 
 这是一个从 Dify DSL 重新组织而来的三语（中文、越南语、英语）物流客服 Demo。它不是逐节点翻译：DeepAgents 提供统一 Agent/Skills 入口，显式步骤机管理多轮业务状态，Pydantic Tools 负责校验，Adapter 负责最终业务调用。
 
-当前 Demo 使用 `DeepSeek-V4-Flash` 驱动 DeepAgents，业务接口继续使用 `MockBackend`。DeepAgent 结合最近六组真实对话和业务 State 进行结构化理解、Skill 匹配、槽位抽取与 Tool 建议；明确的运单号、手机号后四位、确认或取消由确定性状态机处理。Tool 执行完成后，DeepSeek 再结合当前问题、历史、对应 Skill 和真实结果生成自然回复。业务写操作始终由状态机守门，模型不可直接执行。
+当前 Demo 使用 `DeepSeek-V4-Flash` 驱动 DeepAgents，业务接口继续使用 `MockBackend`。DeepAgent 结合最近六组真实对话和业务 State 进行结构化理解、Skill 匹配、主/次意图规划、槽位抽取与下一 Tool 建议；明确的运单号、手机号后四位、确认或取消由确定性状态机处理。多个诉求共用已验证槽位，并由一个活动场景加待办队列顺序完成。Tool 执行完成后，DeepSeek 再结合当前问题、历史、对应 Skill 和真实结果生成自然回复。业务写操作始终由状态机守门，模型不可直接执行。
 
 ## 已实现
 
@@ -13,6 +13,7 @@
 - 投诉/理赔预受理和工单查询
 - VN/app FAQ、三语回复、取消、场景切换、转人工
 - 最近六组对话记忆、会话级运单/工单历史、问候/夸奖/短反应和历史统计
+- 受控多意图：主意图 + 最多三个待办意图、共享运单号、只读任务顺序合并、写任务分别确认
 - 模型断网自动降级与短暂熔断、会话隔离、显式状态、写操作审计、敏感字段防泄漏
 - Mock/HTTP Backend 互换边界
 - 单元测试、多轮测试、API 测试和 DSL 回归案例
@@ -105,7 +106,7 @@ MODEL_THINKING_ENABLED=false
 MODEL_ROUTING_MODE=new_scene
 ```
 
-高置信度业务短语、明确槽位、确认/取消、问候和夸奖直接走确定性路径；歧义表达、复杂追问、纠正或场景切换才调用 DeepAgent。`MODEL_ROUTING_MODE=ambiguous_only` 可进一步限制模型路由。客服路由关闭 DeepSeek 默认思考模式以降低延迟；连接失败后按 `MODEL_FAILURE_COOLDOWN_SECONDS` 暂停重试，期间使用保留上下文的三语降级回复。
+高置信度单一业务短语、明确槽位、确认/取消、问候和夸奖直接走确定性路径；多个意图、否定/纠正、歧义表达、复杂追问或场景切换调用 DeepAgent。`MODEL_ROUTING_MODE=ambiguous_only` 可进一步限制普通模型路由，但多意图与语义冲突仍优先请求模型。客服路由关闭 DeepSeek 默认思考模式以降低延迟；连接失败后按 `MODEL_FAILURE_COOLDOWN_SECONDS` 暂停重试，清晰的多意图按用户提及顺序安全推进，带否定或冲突的表达保守澄清。
 
 模型客户端只在 Agent 层初始化。包内 Skills 会播种到内存 Store，Agent 文件写入被显式禁止，不会获得宿主文件系统访问。语义规划使用从 Skills 提炼的紧凑场景目录，避免 Flash 模型为分类反复读取多个文件；生成最终回复时只加载当前场景的完整 `SKILL.md`。`ConversationCheckpointer` 是唯一会话状态源，保存业务 State 和最近六组消息；需要语义理解时将这些消息及脱敏业务摘要显式传给 DeepAgent。DeepAgent 只输出受约束的计划和 Tool 建议，不直接获得任何业务 Tool；所有查询和写入都由服务层验证后唯一执行，写操作还必须经过确认、业务复核、幂等与审计路径。
 

@@ -30,6 +30,16 @@ class Intent(StrEnum):
     FALLBACK = "fallback"
 
 
+class IntentRelation(StrEnum):
+    """How secondary goals relate to the primary goal in the same user turn."""
+
+    AFTER = "after"
+    PARALLEL = "parallel"
+    CONDITIONAL = "conditional"
+    ALTERNATIVE = "alternative"
+    CORRECTION = "correction"
+
+
 class ToolStatus(StrEnum):
     SUCCESS = "success"
     FAILED = "failed"
@@ -88,6 +98,9 @@ class PendingConfirmation(BaseModel):
 
 class RouteDecision(BaseModel):
     intent: Intent | None = None
+    secondary_intents: list[Intent] = Field(default_factory=list, max_length=3)
+    intent_relation: IntentRelation = IntentRelation.AFTER
+    intent_condition: str | None = Field(default=None, max_length=500)
     language: Literal["en", "vi", "zh"] = "en"
     waybill_no: str | None = None
     invalid_waybill_no: str | None = None
@@ -101,27 +114,34 @@ class RouteDecision(BaseModel):
     modifies_existing: bool = False
     explicit_intent: bool = False
     continuation: bool = False
+    semantic_conflict: bool = False
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     clarify_question: str | None = Field(default=None, max_length=500)
     business_reason: str | None = Field(default=None, max_length=500)
-    recommended_tool: Literal[
-        "query_tracking",
-        "query_package_volume",
-        "retrieve_faq",
-        "query_complaint",
-        "verify_receiver",
-        "urge_delivery",
-        "create_complaint",
-        "check_address_change",
-        "change_address",
-        "transfer_to_human",
-    ] | None = None
+    recommended_tool: (
+        Literal[
+            "query_tracking",
+            "query_package_volume",
+            "retrieve_faq",
+            "query_complaint",
+            "verify_receiver",
+            "urge_delivery",
+            "create_complaint",
+            "check_address_change",
+            "change_address",
+            "transfer_to_human",
+        ]
+        | None
+    ) = None
 
 
 class ModelUnderstanding(BaseModel):
     """Constrained semantic plan produced by DeepAgents for a meaningful turn."""
 
     intent: Intent
+    secondary_intents: list[Intent] = Field(default_factory=list, max_length=3)
+    intent_relation: IntentRelation = IntentRelation.AFTER
+    intent_condition: str | None = Field(default=None, max_length=500)
     language: Literal["en", "vi", "zh"]
     waybill_no: str | None = Field(default=None, pattern=r"^(JT\d{8,13}|\d{8,15})$")
     phone_last4: str | None = Field(default=None, pattern=r"^\d{4}$")
@@ -134,18 +154,33 @@ class ModelUnderstanding(BaseModel):
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     clarify_question: str | None = Field(default=None, max_length=500)
     business_reason: str | None = Field(default=None, max_length=500)
-    recommended_tool: Literal[
-        "query_tracking",
-        "query_package_volume",
-        "retrieve_faq",
-        "query_complaint",
-        "verify_receiver",
-        "urge_delivery",
-        "create_complaint",
-        "check_address_change",
-        "change_address",
-        "transfer_to_human",
-    ] | None = None
+    recommended_tool: (
+        Literal[
+            "query_tracking",
+            "query_package_volume",
+            "retrieve_faq",
+            "query_complaint",
+            "verify_receiver",
+            "urge_delivery",
+            "create_complaint",
+            "check_address_change",
+            "change_address",
+            "transfer_to_human",
+        ]
+        | None
+    ) = None
+
+
+class PendingIntent(BaseModel):
+    """A recognized user goal waiting behind the single authoritative active scene."""
+
+    intent: Intent
+    relation: IntentRelation = IntentRelation.AFTER
+    source_message: str = Field(min_length=1, max_length=1000)
+    condition: str | None = Field(default=None, max_length=500)
+    phone_last4: str | None = Field(default=None, pattern=r"^\d{4}$")
+    ticket_id: str | None = Field(default=None, max_length=64)
+    new_address: str | None = Field(default=None, min_length=8, max_length=500)
 
 
 class ConversationMessage(BaseModel):

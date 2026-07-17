@@ -3,7 +3,7 @@
 | Dify 原节点/场景 | 当前作用 | DeepAgents 目标实现 | 类型 | 是否需多轮状态 | 备注 |
 | --- | --- | --- | --- | --- | --- |
 | `start` / `sys.query` | 接收用户消息 | `POST /v1/chat` + `ChatRequest` | API | 否 | `session_id` 作为 thread id |
-| `llm_understand` | 三语理解、意图/槽位/语言抽取 | 确定性 Router + DeepAgent 语义规划；输入最近六组消息和业务 State | 路由 | 是 | 明确槽位走代码，语义追问/纠正/切换走模型 |
+| `llm_understand` | 三语理解、意图/槽位/语言抽取 | 确定性 Router + DeepAgent 语义规划；输入最近六组消息和业务 State；输出主意图、待办意图及关系 | 路由 | 是 | 明确槽位走代码，多意图/否定/纠正/切换走模型 |
 | `code_parse` | JSON 解析、正则兜底、历史继承 | `router.py` 与 Pydantic 决策模型 | 路由/校验 | 是 | 不信任模型槽位；代码重新校验 |
 | `assign_context_memory` | 保存运单、电话、场景、语言 | `ConversationState` + Checkpointer，另保留最近六组对话 | State | 是 | 不保存 credential/token；复用 session_id 时校验 owner |
 | `if_slot_missing` | 缺运单或意图不清分支 | `ConversationService` 步骤机 | State | 是 | 支持取消、修改、切换、重复询问 |
