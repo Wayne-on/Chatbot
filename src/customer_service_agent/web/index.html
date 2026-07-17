@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Logistics Copilot — DeepAgents 智能物流客服测试台"
+    />
+    <title>Logistics Copilot · 客服测试台</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="测试工具栏">
+        <div class="brand-block">
+          <div class="brand-mark" aria-hidden="true">LC</div>
+          <div>
+            <p class="eyebrow">DEEPAGENTS DEMO</p>
+            <h1>Logistics Copilot</h1>
+          </div>
+        </div>
+
+        <div class="runtime-card">
+          <div class="runtime-row">
+            <span class="connection-dot" id="connectionDot" aria-hidden="true"></span>
+            <div>
+              <strong id="connectionLabel">正在连接服务</strong>
+              <span>DeepSeek V4 Flash</span>
+            </div>
+          </div>
+          <div class="runtime-tags" aria-label="运行模式">
+            <span>DeepAgent 路由</span>
+            <span>Mock Tools</span>
+          </div>
+        </div>
+
+        <section class="sidebar-section" aria-labelledby="scenarioTitle">
+          <div class="section-heading">
+            <p class="eyebrow">QUICK START</p>
+            <h2 id="scenarioTitle">选择测试场景</h2>
+          </div>
+          <div class="scenario-list">
+            <button class="scenario-button" data-prompt="帮我查一下快递" type="button">
+              <span class="scenario-icon" aria-hidden="true">查</span>
+              <span><strong>查询物流轨迹</strong><small>测试普通查件流程</small></span>
+            </button>
+            <button
+              class="scenario-button"
+              data-prompt="我的快递显示签收了，但是我没有收到"
+              type="button"
+            >
+              <span class="scenario-icon" aria-hidden="true">签</span>
+              <span><strong>签收未收到</strong><small>测试身份校验与投诉确认</small></span>
+            </button>
+            <button
+              class="scenario-button"
+              data-prompt="这个件都到我们市里两天了，怎么还没人送？"
+              type="button"
+            >
+              <span class="scenario-icon" aria-hidden="true">催</span>
+              <span><strong>催促派送</strong><small>测试复杂语义理解</small></span>
+            </button>
+            <button class="scenario-button" data-prompt="我想修改收货地址" type="button">
+              <span class="scenario-icon" aria-hidden="true">址</span>
+              <span><strong>修改地址</strong><small>测试高风险操作确认</small></span>
+            </button>
+            <button
+              class="scenario-button"
+              data-prompt="Chất lỏng có được phép gửi không?"
+              data-language="vi"
+              type="button"
+            >
+              <span class="scenario-icon" aria-hidden="true">VI</span>
+              <span><strong>越南语 FAQ</strong><small>测试三语识别与政策回复</small></span>
+            </button>
+          </div>
+        </section>
+
+        <section class="mock-guide" aria-labelledby="mockGuideTitle">
+          <div class="section-heading compact">
+            <p class="eyebrow">MOCK GUIDE</p>
+            <h2 id="mockGuideTitle">测试数据提示</h2>
+          </div>
+          <dl>
+            <div><dt>运输中</dt><dd>运单末位 0–2</dd></div>
+            <div><dt>派送中</dt><dd>运单末位 3–4</dd></div>
+            <div><dt>已签收</dt><dd>运单末位 5–6</dd></div>
+            <div><dt>延误</dt><dd>运单末位 7–8</dd></div>
+            <div><dt>身份通过</dt><dd>手机号后四位 1234</dd></div>
+          </dl>
+        </section>
+      </aside>
+
+      <main class="chat-panel">
+        <header class="chat-header">
+          <div class="mobile-brand" aria-hidden="true">
+            <span>LC</span>
+          </div>
+          <div class="header-copy">
+            <p class="eyebrow">LIVE CONVERSATION</p>
+            <div class="header-title-row">
+              <h2>智能物流客服</h2>
+              <span class="live-badge"><i aria-hidden="true"></i>在线</span>
+            </div>
+          </div>
+          <div class="header-actions">
+            <label class="language-field">
+              <span>语言</span>
+              <select id="languageSelect" aria-label="对话语言">
+                <option value="zh-CN">中文</option>
+                <option value="vi">Tiếng Việt</option>
+                <option value="en">English</option>
+              </select>
+            </label>
+            <button class="secondary-button" id="newConversationButton" type="button">
+              新对话
+            </button>
+          </div>
+        </header>
+
+        <section class="state-strip" aria-label="当前会话状态">
+          <div class="state-item">
+            <span>意图</span>
+            <strong id="intentValue">等待识别</strong>
+          </div>
+          <div class="state-divider" aria-hidden="true"></div>
+          <div class="state-item">
+            <span>步骤</span>
+            <strong id="stepValue">未开始</strong>
+          </div>
+          <div class="state-divider" aria-hidden="true"></div>
+          <div class="state-item">
+            <span>状态</span>
+            <strong class="status-value" id="statusValue" data-status="idle">空闲</strong>
+          </div>
+          <div class="session-label" id="sessionLabel" title="当前 Session ID"></div>
+        </section>
+
+        <section class="messages" id="messages" aria-live="polite" aria-label="聊天消息">
+          <div class="date-divider"><span>今天</span></div>
+          <article class="message assistant-message">
+            <div class="avatar assistant-avatar" aria-hidden="true">AI</div>
+            <div class="message-column">
+              <div class="message-meta"><strong>Logistics Copilot</strong><span>刚刚</span></div>
+              <div class="bubble assistant-bubble">
+                <p>你好，我是物流智能客服测试助手。</p>
+                <p>你可以直接描述问题，也可以从左侧选择一个测试场景开始。</p>
+              </div>
+            </div>
+          </article>
+        </section>
+
+        <div class="error-banner" id="errorBanner" role="alert" hidden>
+          <strong>请求未完成</strong>
+          <span id="errorText">请确认本地服务正在运行。</span>
+          <button type="button" id="dismissErrorButton" aria-label="关闭错误提示">关闭</button>
+        </div>
+
+        <footer class="composer-area">
+          <div class="composer">
+            <textarea
+              id="messageInput"
+              rows="1"
+              maxlength="4000"
+              placeholder="描述你的物流问题…"
+              aria-label="输入消息"
+            ></textarea>
+            <button id="sendButton" class="send-button" type="button" aria-label="发送消息">
+              <span>发送</span>
+              <span aria-hidden="true">↗</span>
+            </button>
+          </div>
+          <div class="composer-meta">
+            <span><kbd>Enter</kbd> 发送 · <kbd>Shift</kbd> + <kbd>Enter</kbd> 换行</span>
+            <span>业务结果来自 Mock Tool，不代表真实物流状态</span>
+          </div>
+        </footer>
+      </main>
+    </div>
+
+    <dialog class="data-dialog" id="dataDialog" aria-labelledby="dataDialogTitle">
+      <div class="dialog-header">
+        <div>
+          <p class="eyebrow">TOOL RESULT</p>
+          <h2 id="dataDialogTitle">本轮业务数据</h2>
+        </div>
+        <button type="button" id="closeDialogButton" aria-label="关闭详情">×</button>
+      </div>
+      <pre id="dataContent"></pre>
+    </dialog>
+
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>

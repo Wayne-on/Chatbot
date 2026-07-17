@@ -1,0 +1,47 @@
+[project]
+name = "customer-service-deepagent"
+version = "0.1.0"
+description = "A stateful trilingual logistics customer-service demo migrated from Dify to DeepAgents."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  # 49.0.0 has no CPython x86_64/universal macOS wheel; DeepAgents' provider extras
+  # otherwise trigger a long source build on Intel development machines.
+  "cryptography>=43,<49",
+  "deepagents>=0.5.2,<1.0",
+  "fastapi>=0.115,<1.0",
+  "httpx>=0.27,<1.0",
+  "langchain-openai>=0.3,<2.0",
+  "langgraph>=0.6,<2.0",
+  "pydantic>=2.10,<3.0",
+  "pydantic-settings>=2.7,<3.0",
+  "uvicorn[standard]>=0.34,<1.0",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3,<10.0",
+  "pytest-asyncio>=0.25,<2.0",
+  "ruff>=0.9,<1.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/customer_service_agent"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+asyncio_mode = "auto"
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+ignore = ["E501"]

@@ -1,0 +1,60 @@
+[
+  {
+    "name": "track_normal",
+    "messages": ["帮我查快递", "JT123456781"],
+    "expected_intent": "tracking",
+    "expected_status": "completed"
+  },
+  {
+    "name": "track_missing_waybill",
+    "messages": ["Where is my package?"],
+    "expected_intent": "tracking",
+    "expected_action": "provide_waybill_no"
+  },
+  {
+    "name": "package_volume",
+    "messages": ["查询包裹体积 JT123456781"],
+    "expected_intent": "query_package_volume",
+    "expected_status": "completed"
+  },
+  {
+    "name": "delivery_followup",
+    "messages": ["催件 JT123456787", "确认"],
+    "expected_intent": "delivery_followup",
+    "expected_status": "completed"
+  },
+  {
+    "name": "delivered_not_received",
+    "messages": ["显示签收但没收到", "JT123456785", "1234", "确认"],
+    "expected_intent": "delivered_not_received",
+    "expected_status": "completed"
+  },
+  {
+    "name": "change_address_cancel",
+    "messages": ["改地址 JT123456781", "123 Nguyen Hue Street, District 1", "取消"],
+    "expected_status": "cancelled"
+  },
+  {
+    "name": "complaint",
+    "messages": ["投诉运单 JT123456781，物流服务很差", "确认"],
+    "expected_intent": "complaint",
+    "expected_status": "completed"
+  },
+  {
+    "name": "faq",
+    "messages": ["液体能不能寄？"],
+    "expected_intent": "faq",
+    "expected_status": "completed"
+  },
+  {
+    "name": "fallback",
+    "messages": ["你好"],
+    "expected_intent": "conversation",
+    "expected_status": "completed"
+  },
+  {
+    "name": "human_transfer",
+    "messages": ["我要人工客服"],
+    "expected_status": "transfer"
+  }
+]
