@@ -136,7 +136,7 @@ class RouteDecision(BaseModel):
 
 
 class ModelUnderstanding(BaseModel):
-    """Constrained semantic plan produced by DeepAgents for a meaningful turn."""
+    """Constrained semantic plan produced by the LangGraph semantic node."""
 
     intent: Intent
     secondary_intents: list[Intent] = Field(default_factory=list, max_length=3)

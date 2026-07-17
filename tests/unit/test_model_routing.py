@@ -1,6 +1,28 @@
 from customer_service_agent.schemas import ChatRequest, Intent, RouteDecision, SceneStatus
 
 
+async def test_deterministic_route_skips_semantic_langgraph_node(container) -> None:
+    calls: list[str] = []
+
+    async def model_router(message, state, context):  # type: ignore[no-untyped-def]
+        calls.append(message)
+        return RouteDecision(intent=Intent.FAQ, language="en", explicit_intent=True)
+
+    container.agent.service.model_router = model_router
+    response = await container.agent.ainvoke(
+        ChatRequest(
+            session_id="graph-fast-path",
+            user_id="u1",
+            message="查快递 JT123456781",
+            language="zh-CN",
+        )
+    )
+
+    assert response.current_intent == Intent.TRACKING
+    assert response.status == SceneStatus.COMPLETED
+    assert calls == []
+
+
 async def test_ambiguous_new_scene_can_use_structured_model_router(container) -> None:
     async def model_router(message, state, context):  # type: ignore[no-untyped-def]
         return RouteDecision(intent=Intent.FAQ, language="en", explicit_intent=True)

@@ -21,7 +21,7 @@ def create_app(container: Container | None = None) -> FastAPI:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     app = FastAPI(
-        title="Logistics Customer Service DeepAgent",
+        title="Logistics Customer Service LangGraph",
         version="0.1.0",
         description="Trilingual stateful customer-service demo migrated from Dify.",
     )

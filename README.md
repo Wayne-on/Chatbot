@@ -1,8 +1,8 @@
-# Logistics Customer Service DeepAgent
+# Logistics Customer Service LangGraph
 
-这是一个从 Dify DSL 重新组织而来的三语（中文、越南语、英语）物流客服 Demo。它不是逐节点翻译：DeepAgents 提供统一 Agent/Skills 入口，显式步骤机管理多轮业务状态，Pydantic Tools 负责校验，Adapter 负责最终业务调用。
+这是一个从 Dify DSL 重新组织而来的三语（中文、越南语、英语）物流客服 Demo。当前分支使用外层 LangGraph 编排确定性节点和模型节点，显式步骤机管理多轮业务状态，Pydantic Tools 负责校验，Adapter 负责最终业务调用。`main` 分支保留功能相同的 DeepAgents 实现，便于对比。
 
-当前 Demo 使用 `DeepSeek-V4-Flash` 驱动 DeepAgents，业务接口继续使用 `MockBackend`。DeepAgent 结合最近六组真实对话和业务 State 进行结构化理解、Skill 匹配、主/次意图规划、槽位抽取与下一 Tool 建议；明确的运单号、手机号后四位、确认或取消由确定性状态机处理。多个诉求共用已验证槽位，并由一个活动场景加待办队列顺序完成。Tool 执行完成后，DeepSeek 再结合当前问题、历史、对应 Skill 和真实结果生成自然回复。业务写操作始终由状态机守门，模型不可直接执行。
+当前 Demo 使用 `DeepSeek-V4-Flash` 驱动 LangGraph 的语义节点，业务接口继续使用 `MockBackend`。Graph 明确执行 `load_session -> deterministic_router -> semantic_router（按需） -> resolve_decision -> execute_business`；语义节点结合最近六组真实对话和业务 State 输出主/次意图、关系和槽位。明确的运单号、手机号后四位、确认或取消走确定性快速路径。多个诉求共用已验证槽位，并由一个活动场景加待办队列顺序完成。Tool 执行完成后，DeepSeek 再结合当前问题、历史、对应 Skill 和真实结果生成自然回复。业务写操作始终由状态机守门，模型不可直接执行。
 
 ## 已实现
 
@@ -106,9 +106,9 @@ MODEL_THINKING_ENABLED=false
 MODEL_ROUTING_MODE=new_scene
 ```
 
-高置信度单一业务短语、明确槽位、确认/取消、问候和夸奖直接走确定性路径；多个意图、否定/纠正、歧义表达、复杂追问或场景切换调用 DeepAgent。`MODEL_ROUTING_MODE=ambiguous_only` 可进一步限制普通模型路由，但多意图与语义冲突仍优先请求模型。客服路由关闭 DeepSeek 默认思考模式以降低延迟；连接失败后按 `MODEL_FAILURE_COOLDOWN_SECONDS` 暂停重试，清晰的多意图按用户提及顺序安全推进，带否定或冲突的表达保守澄清。
+高置信度单一业务短语、明确槽位、确认/取消、问候和夸奖由 Graph 走确定性路径并跳过模型节点；多个意图、否定/纠正、歧义表达、复杂追问或场景切换进入 `semantic_router`。`MODEL_ROUTING_MODE=ambiguous_only` 可进一步限制普通模型路由，但多意图与语义冲突仍优先请求模型。客服路由关闭 DeepSeek 默认思考模式以降低延迟；连接失败后按 `MODEL_FAILURE_COOLDOWN_SECONDS` 暂停重试，清晰的多意图按用户提及顺序安全推进，带否定或冲突的表达保守澄清。
 
-模型客户端只在 Agent 层初始化。包内 Skills 会播种到内存 Store，Agent 文件写入被显式禁止，不会获得宿主文件系统访问。语义规划使用从 Skills 提炼的紧凑场景目录，避免 Flash 模型为分类反复读取多个文件；生成最终回复时只加载当前场景的完整 `SKILL.md`。`ConversationCheckpointer` 是唯一会话状态源，保存业务 State 和最近六组消息；需要语义理解时将这些消息及脱敏业务摘要显式传给 DeepAgent。DeepAgent 只输出受约束的计划和 Tool 建议，不直接获得任何业务 Tool；所有查询和写入都由服务层验证后唯一执行，写操作还必须经过确认、业务复核、幂等与审计路径。
+模型客户端只在 Agent 层初始化。语义节点使用从 Skills 提炼的紧凑场景目录，生成最终回复时只读取当前场景的完整 `SKILL.md`。`ConversationCheckpointer` 是唯一持久会话状态源，Graph 的单轮运行状态只保存请求、规则决策、模型决策和最终响应；需要语义理解时显式传入最近消息及脱敏业务摘要。模型只输出受 Pydantic 约束的计划和 Tool 建议，不直接获得任何业务 Tool；所有查询和写入都由服务层验证后唯一执行，写操作还必须经过确认、业务复核、幂等与审计路径。
 
 ## 配置真实业务接口
 
@@ -153,7 +153,8 @@ BUSINESS_QUERY_MAX_RETRIES=2
 ```text
 docs/                         DSL 分析、迁移矩阵、架构和 API 契约
 src/customer_service_agent/
-  agent.py                    DeepAgents/业务状态机统一入口
+  agent.py                    模型客户端与 LangGraph 统一入口
+  workflow.py                 StateGraph 节点、条件边和单轮运行状态
   state.py                    ConversationState 和 Checkpointer
   router.py                   三语确定性路由与槽位解析
   skills/*/SKILL.md           独立客服场景 SOP
@@ -169,6 +170,7 @@ tests/                        单元、多轮、集成和 DSL 回归测试
 - [DSL 分析](docs/dsl-analysis.md)
 - [迁移矩阵](docs/migration-matrix.md)
 - [架构说明](docs/architecture.md)
+- [LangGraph 与 DeepAgents 实现对比](docs/implementation-comparison.md)
 - [API 契约](docs/api-contract.md)
 - [已知问题和待确认项](docs/open-questions.md)
 

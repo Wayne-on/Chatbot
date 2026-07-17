@@ -1,14 +1,13 @@
 [project]
-name = "customer-service-deepagent"
+name = "customer-service-langgraph"
 version = "0.1.0"
-description = "A stateful trilingual logistics customer-service demo migrated from Dify to DeepAgents."
+description = "A stateful trilingual logistics customer-service demo orchestrated with LangGraph."
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [
-  # 49.0.0 has no CPython x86_64/universal macOS wheel; DeepAgents' provider extras
-  # otherwise trigger a long source build on Intel development machines.
+  # 49.0.0 has no CPython x86_64/universal macOS wheel and triggers a long source
+  # build on Intel development machines.
   "cryptography>=43,<49",
-  "deepagents>=0.5.2,<1.0",
   "fastapi>=0.115,<1.0",
   "httpx>=0.27,<1.0",
   "langchain-openai>=0.3,<2.0",

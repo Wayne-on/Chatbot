@@ -27,6 +27,7 @@ from customer_service_agent.schemas import (
 from customer_service_agent.services.conversation_service import ConversationService
 from customer_service_agent.state import ConversationState
 from customer_service_agent.tools.service import BusinessTools
+from customer_service_agent.workflow import CustomerServiceWorkflow
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,7 @@ SKILLS_ROOT = PACKAGE_ROOT / "skills"
 
 
 class CustomerServiceAgent:
-    """Unified API-facing agent entry with an optional DeepAgents runtime."""
+    """Unified API entry backed by an explicit outer LangGraph workflow."""
 
     def __init__(
         self,
@@ -49,36 +50,42 @@ class CustomerServiceAgent:
         self.tools = tools
         self._model_unavailable_until = 0.0
         self.response_model: Any | None = None
-        self.deep_agent: Any | None = None
+        self.semantic_model: Any | None = None
         if settings.model_enabled:
             self.response_model = self._build_model()
-            self.deep_agent = self._build_deep_agent(self.response_model)
-        if self.deep_agent is not None:
-            self.service.model_router = self._route_with_deep_agent
+            self.semantic_model = self._build_semantic_model(self.response_model)
+        if self.semantic_model is not None:
+            self.service.model_router = self._route_with_langgraph_model
             self.service.response_generator = self._generate_final_reply
+        self.workflow = CustomerServiceWorkflow(service)
+        self.graph = self.workflow.graph
 
     async def ainvoke(self, request: ChatRequest, *, trace_id: str | None = None) -> ChatResponse:
-        # The explicit state machine remains authoritative for business execution. The optional
-        # DeepAgents runtime is available for model-enhanced understanding without changing this API.
-        return await self.service.handle(request, trace_id=trace_id)
+        return await self.workflow.ainvoke(request, trace_id=trace_id)
 
-    async def _route_with_deep_agent(
+    async def _route_with_langgraph_model(
         self,
         message: str,
         state: ConversationState,
         context: RequestContext,
     ) -> RouteDecision | None:
-        if self.deep_agent is None or self._model_in_cooldown():
+        if self.semantic_model is None or self._model_in_cooldown():
             return None
         started = perf_counter()
         try:
             understanding: ModelUnderstanding | None = None
-            result: dict[str, Any] = {}
+            raw_message: Any | None = None
             state_context = self._safe_conversation_context(state)
             for attempt in range(2):
-                messages = [
-                    {"role": item.role, "content": item.content} for item in state.recent_messages
+                messages: list[dict[str, str]] = [
+                    {
+                        "role": "system",
+                        "content": f"{MAIN_AGENT_PROMPT}\n\n{SEMANTIC_SKILL_CATALOG}",
+                    }
                 ]
+                messages.extend(
+                    {"role": item.role, "content": item.content} for item in state.recent_messages
+                )
                 messages.append(
                     {
                         "role": "user",
@@ -92,9 +99,20 @@ class CustomerServiceAgent:
                         ),
                     }
                 )
-                result = await self.deep_agent.ainvoke({"messages": messages})
+                result = await self.semantic_model.ainvoke(messages)
                 try:
-                    structured = result.get("structured_response")
+                    if isinstance(result, dict) and "parsed" in result:
+                        raw_message = result.get("raw")
+                        if result.get("parsing_error") is not None:
+                            if attempt == 0:
+                                logger.warning(
+                                    "model_route_parse_retry trace_id=%s", context.trace_id
+                                )
+                                continue
+                            raise result["parsing_error"]
+                        structured = result.get("parsed")
+                    else:
+                        structured = result
                     understanding = (
                         structured
                         if isinstance(structured, ModelUnderstanding)
@@ -107,15 +125,15 @@ class CustomerServiceAgent:
                         continue
                     raise
             assert understanding is not None
-            usage = self._usage_from_result(result)
+            usage = getattr(raw_message, "usage_metadata", None) or {}
             logger.info(
                 "model_call trace_id=%s model_latency_ms=%.2f input_tokens=%s "
                 "output_tokens=%s total_tokens=%s",
                 context.trace_id,
                 (perf_counter() - started) * 1000,
-                usage["input_tokens"],
-                usage["output_tokens"],
-                usage["total_tokens"],
+                int(usage.get("input_tokens", 0) or 0),
+                int(usage.get("output_tokens", 0) or 0),
+                int(usage.get("total_tokens", 0) or 0),
             )
             self._model_unavailable_until = 0.0
             return RouteDecision(
@@ -252,40 +270,15 @@ class CustomerServiceAgent:
             extra_body=extra_body,
         )
 
-    def _build_deep_agent(self, model: Any) -> Any:
-        from deepagents import FilesystemPermission, create_deep_agent
-        from deepagents.backends import StoreBackend
-        from langchain.agents.structured_output import ToolStrategy
-        from langgraph.store.memory import InMemoryStore
-
-        store = InMemoryStore()
-        skills_backend = StoreBackend(
-            store=store,
-            namespace=lambda _runtime: ("customer-service-agent",),
+    @staticmethod
+    def _build_semantic_model(model: Any) -> Any:
+        semantic_model = model.with_structured_output(
+            ModelUnderstanding,
+            method="function_calling",
+            include_raw=True,
         )
-        skill_files = [
-            (f"/skills/{path.relative_to(SKILLS_ROOT).as_posix()}", path.read_bytes())
-            for path in SKILLS_ROOT.rglob("*")
-            if path.is_file()
-        ]
-        uploaded = skills_backend.upload_files(skill_files)
-        if any(item.error for item in uploaded):
-            raise RuntimeError("failed to seed one or more DeepAgents Skill files")
-        agent = create_deep_agent(
-            model=model,
-            # Semantic planning is read-only. Business Tools execute exactly once in the service.
-            tools=[],
-            system_prompt=f"{MAIN_AGENT_PROMPT}\n\n{SEMANTIC_SKILL_CATALOG}",
-            backend=skills_backend,
-            store=store,
-            # The compact catalog avoids multi-call Skill file browsing during classification.
-            # The selected full SKILL.md is still loaded for grounded final-response generation.
-            skills=None,
-            permissions=[FilesystemPermission(operations=["write"], paths=["/**"], mode="deny")],
-            response_format=ToolStrategy(ModelUnderstanding),
-        )
-        logger.info("DeepAgents runtime initialized with skills_root=%s", SKILLS_ROOT)
-        return agent
+        logger.info("LangGraph semantic model initialized with skills_root=%s", SKILLS_ROOT)
+        return semantic_model
 
     @staticmethod
     def _message_text(message: Any) -> str:
@@ -354,16 +347,6 @@ class CustomerServiceAgent:
             return ""
         path = SKILLS_ROOT / name / "SKILL.md"
         return path.read_text(encoding="utf-8") if path.exists() else ""
-
-    @staticmethod
-    def _usage_from_result(result: dict[str, Any]) -> dict[str, int]:
-        totals = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
-        for message in result.get("messages", []):
-            usage = getattr(message, "usage_metadata", None) or {}
-            totals["input_tokens"] += int(usage.get("input_tokens", 0) or 0)
-            totals["output_tokens"] += int(usage.get("output_tokens", 0) or 0)
-            totals["total_tokens"] += int(usage.get("total_tokens", 0) or 0)
-        return totals
 
     @staticmethod
     def _safe_conversation_context(state: ConversationState) -> dict[str, Any]:

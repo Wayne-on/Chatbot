@@ -1,22 +1,24 @@
 # 架构说明
 
-```text
-FastAPI
-  -> CustomerServiceAgent（统一入口）
-     -> ConversationService（显式步骤机）
-        -> Router（确定性槽位/确认/取消/转人工）
-        -> DeepAgent（结合最近六组对话和业务 State 做语义规划）
-        -> BusinessTools（Pydantic 输入、统一结果、耗时日志）
-           -> BusinessBackend
-              -> MockBackend
-              -> HttpBackend
-        -> DeepSeek 最终回复生成（结合 Skill、历史和真实 Tool 结果）
-        -> Checkpointer（当前为内存，可替换 Redis/PostgreSQL）
+```mermaid
+flowchart TD
+    A[FastAPI /v1/chat] --> B[CustomerServiceAgent]
+    B --> C[load_session]
+    C --> D[deterministic_router]
+    D -->|明确槽位/确认/取消/单一高置信意图| F[resolve_decision]
+    D -->|多意图/否定/纠正/歧义追问| E[semantic_router<br/>DeepSeek structured output]
+    E --> F
+    F --> G[execute_business]
+    G --> H[ConversationService<br/>步骤机与待办意图队列]
+    H --> I[BusinessTools]
+    I --> J[MockBackend / HttpBackend]
+    H --> K[保存 ConversationState]
+    K --> L[ChatResponse]
 ```
 
-`CustomerServiceAgent` 是 API 的唯一业务入口。当前配置使用 `deepseek-v4-flash`：DeepAgent 对新场景、多意图、语义追问、否定、纠正和切换输出受 Pydantic 约束的计划；明确的运单号、手机号后四位、地址、工单号和写操作确认继续走确定性快速路径。语义计划包含一个当前主意图、最多三个次要意图及其并列/顺序/条件/备选/纠正关系。Tool 返回后，另一次受约束的模型调用结合当前问题、最近对话、对应 Skill 和真实结果生成自然回复。若模型不可用或回复校验失败，系统自动使用安全模板。
+`CustomerServiceAgent` 是 API 的唯一入口，`CustomerServiceWorkflow` 构建并编译外层 `StateGraph`。当前配置使用 `deepseek-v4-flash`：`semantic_router` 对新场景、多意图、语义追问、否定、纠正和切换输出受 Pydantic 约束的计划；明确的运单号、手机号后四位、地址、工单号和写操作确认从条件边直接跳过模型。语义计划包含一个当前主意图、最多三个次要意图及其并列/顺序/条件/备选/纠正关系。
 
-没有额外包一层业务 LangGraph。DeepAgents 自身使用 LangGraph runtime，而本项目的客服步骤少且边界固定，由显式步骤机表达更容易测试和审计。
+Graph 负责确定节点执行顺序，`ConversationService` 仍是业务规则的唯一执行者。Tool 返回后，可选的模型调用结合当前问题、最近对话、对应 Skill 和真实结果生成自然回复；若模型不可用或回复校验失败，系统使用安全模板。
 
 ## 状态边界
 
@@ -37,9 +39,11 @@ FastAPI
 - “或者”等备选关系不会擅自执行，系统先让用户选择。
 - 模型不可用时，清晰的多意图按用户提及顺序降级；包含否定或纠正时只澄清，不依据关键词执行。
 
-## DeepAgents 集成
+## LangGraph 集成
 
-项目使用官方 `create_deep_agent` 接口。启动时把包内受信任 Skill 文件播种到 `InMemoryStore/StoreBackend`，禁止 Agent 文件写入，不向 Web 服务暴露宿主文件系统。语义规划阶段一次性使用精简 Skill 目录，避免为一次分类触发多轮文件读取；最终回复阶段只加载已选场景的完整 Skill。`ConversationCheckpointer` 是唯一会话状态源；最近消息和脱敏业务摘要在需要理解时显式传给 DeepAgent，不另建第二套隐式模型记忆。项目业务步骤机仍是 Tool 选择、高风险操作和状态跳转的最终守门层。
+项目直接使用 `StateGraph`、`START`、`END` 和条件边。Graph 单轮状态由 `CustomerServiceGraphState` 定义，包含请求、业务 State、规则决策、模型决策、合并决策和响应。`ConversationCheckpointer` 继续作为唯一持久业务状态源，并在整个 Graph 调用期间持有会话锁；这样不会同时维护两份对话记忆，也不会把 `user_credential` 写进 Graph 或会话状态。生产环境可将这一协议实现替换为 Redis/PostgreSQL。
+
+语义节点直接调用模型的结构化输出接口，不向模型开放业务 Tool。包内 Skill 的紧凑目录进入语义 Prompt，最终回复阶段才读取当前场景的完整 Skill；Tool 选择、高风险操作和状态跳转仍由业务步骤机守门。
 
 DeepSeek 连接失败会开启短暂冷却，避免每条消息反复等待网络重试。冷却期间确定性 Router、会话级标识符历史和三语无 Tool 回复继续工作；不会因为“额”、感谢、夸奖或询问历史而累计失败并错误转人工。
 

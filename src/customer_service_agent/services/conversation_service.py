@@ -73,213 +73,106 @@ class ConversationService:
         ) = None
 
     async def handle(self, request: ChatRequest, *, trace_id: str | None = None) -> ChatResponse:
+        """Compatibility entrypoint used outside the LangGraph API workflow."""
         started = perf_counter()
         trace_id = trace_id or uuid4().hex
-        context = RequestContext(
+        context = self.build_context(request, trace_id)
+        async with self.checkpointer.session(request.session_id) as state:
+            self.prepare_state(state, request.user_id)
+            rule_decision = self.route_deterministically(request, state)
+            model_decision: RouteDecision | None = None
+            if self.should_use_model_router(state, rule_decision):
+                assert self.model_router is not None
+                model_decision = await self.model_router(request.message, state, context)
+            decision = self.resolve_decision(rule_decision, model_decision)
+            return await self.execute_decision(
+                request,
+                state,
+                context,
+                decision,
+                started=started,
+            )
+
+    @staticmethod
+    def build_context(request: ChatRequest, trace_id: str) -> RequestContext:
+        return RequestContext(
             session_id=request.session_id,
             user_id=request.user_id,
             request_id=request.request_id or uuid4().hex,
             trace_id=trace_id,
             user_credential=request.user_credential,
         )
-        async with self.checkpointer.session(request.session_id) as state:
-            owner_hash = hash_subject(request.user_id)
-            if state.owner_hash and state.owner_hash != owner_hash:
-                # A reused session ID must never reveal another user's state.
-                state.clear_for_new_owner()
-            state.owner_hash = owner_hash
 
-            rule_decision = self.router.route(
-                request.message,
-                requested_language=request.language,
-                state=state,
-            )
-            decision = rule_decision
-            if self._should_use_model_router(state, rule_decision):
-                assert self.model_router is not None
-                model_decision = await self.model_router(request.message, state, context)
-                if model_decision is not None and not (
-                    model_decision.intent == Intent.FALLBACK
-                    and rule_decision.intent is not None
-                    and not rule_decision.secondary_intents
-                    and not rule_decision.semantic_conflict
-                ):
-                    decision = model_decision.model_copy(
-                        update={
-                            "semantic_conflict": rule_decision.semantic_conflict,
-                            # Deterministic confirmation/cancellation detection is authoritative.
-                            "cancel_requested": (
-                                model_decision.cancel_requested
-                                if rule_decision.semantic_conflict
-                                else rule_decision.cancel_requested
-                                or model_decision.cancel_requested
-                            ),
-                            "confirmation": rule_decision.confirmation,
-                            "rejection": rule_decision.rejection,
-                            "human_requested": (
-                                model_decision.human_requested
-                                if rule_decision.semantic_conflict
-                                else rule_decision.human_requested or model_decision.human_requested
-                            ),
-                            # Regex-validated identifiers remain a deterministic fallback.
-                            "waybill_no": (model_decision.waybill_no or rule_decision.waybill_no),
-                            "phone_last4": (
-                                model_decision.phone_last4 or rule_decision.phone_last4
-                            ),
-                            "ticket_id": (model_decision.ticket_id or rule_decision.ticket_id),
-                            "new_address": (
-                                model_decision.new_address or rule_decision.new_address
-                            ),
-                            "invalid_waybill_no": rule_decision.invalid_waybill_no,
-                        }
-                    )
-                elif model_decision is None and rule_decision.semantic_conflict:
-                    mentioned = [
-                        intent
-                        for intent in [
-                            rule_decision.intent,
-                            *rule_decision.secondary_intents,
-                        ]
-                        if intent is not None
-                    ]
-                    decision = RouteDecision(
-                        intent=Intent.FALLBACK,
-                        language=rule_decision.language,
-                        clarify_question=self.responses.semantic_clarification(
-                            rule_decision.language,
-                            mentioned,
-                        ),
-                    )
-            elif rule_decision.semantic_conflict and self.model_router is None:
-                mentioned = [
-                    intent
-                    for intent in [rule_decision.intent, *rule_decision.secondary_intents]
-                    if intent is not None
-                ]
-                decision = RouteDecision(
-                    intent=Intent.FALLBACK,
-                    language=rule_decision.language,
-                    clarify_question=self.responses.semantic_clarification(
-                        rule_decision.language,
-                        mentioned,
+    @staticmethod
+    def prepare_state(state: ConversationState, user_id: str) -> None:
+        owner_hash = hash_subject(user_id)
+        if state.owner_hash and state.owner_hash != owner_hash:
+            # A reused session ID must never reveal another user's state.
+            state.clear_for_new_owner()
+        state.owner_hash = owner_hash
+
+    def route_deterministically(
+        self, request: ChatRequest, state: ConversationState
+    ) -> RouteDecision:
+        return self.router.route(
+            request.message,
+            requested_language=request.language,
+            state=state,
+        )
+
+    def resolve_decision(
+        self,
+        rule_decision: RouteDecision,
+        model_decision: RouteDecision | None,
+    ) -> RouteDecision:
+        decision = rule_decision
+        if model_decision is not None and not (
+            model_decision.intent == Intent.FALLBACK
+            and rule_decision.intent is not None
+            and not rule_decision.secondary_intents
+            and not rule_decision.semantic_conflict
+        ):
+            return model_decision.model_copy(
+                update={
+                    "semantic_conflict": rule_decision.semantic_conflict,
+                    # Deterministic confirmation/cancellation detection is authoritative.
+                    "cancel_requested": (
+                        model_decision.cancel_requested
+                        if rule_decision.semantic_conflict
+                        else rule_decision.cancel_requested or model_decision.cancel_requested
                     ),
-                )
-            state.language = decision.language
-            existing_waybill = state.slots.get("waybill_no") or state.last_waybill_no
-            if (
-                not state.active
-                and not decision.waybill_no
-                and not decision.invalid_waybill_no
-                and existing_waybill
-                and decision.intent in WAYBILL_INTENTS
-            ):
-                # A related follow-up reuses the known shipment unless the user supplies a new one.
-                decision = decision.model_copy(update={"waybill_no": existing_waybill})
-            existing_ticket = state.slots.get("ticket_id") or state.last_ticket_id
-            if (
-                not decision.ticket_id
-                and existing_ticket
-                and decision.intent == Intent.QUERY_COMPLAINT
-            ):
-                decision = decision.model_copy(update={"ticket_id": existing_ticket})
-            if decision.waybill_no and existing_waybill and decision.waybill_no != existing_waybill:
-                # Identity and address data are shipment-specific and must never carry over.
-                state.slots["phone_last4"] = None
-                state.slots["new_address"] = None
-                state.scene_context = {}
-            previous_intent = state.current_intent
-            is_switch = bool(
-                state.active
-                and decision.explicit_intent
-                and decision.intent
-                and decision.intent != Intent.CONVERSATION
-                and decision.intent != previous_intent
+                    "confirmation": rule_decision.confirmation,
+                    "rejection": rule_decision.rejection,
+                    "human_requested": (
+                        model_decision.human_requested
+                        if rule_decision.semantic_conflict
+                        else rule_decision.human_requested or model_decision.human_requested
+                    ),
+                    # Regex-validated identifiers remain a deterministic fallback.
+                    "waybill_no": model_decision.waybill_no or rule_decision.waybill_no,
+                    "phone_last4": model_decision.phone_last4 or rule_decision.phone_last4,
+                    "ticket_id": model_decision.ticket_id or rule_decision.ticket_id,
+                    "new_address": model_decision.new_address or rule_decision.new_address,
+                    "invalid_waybill_no": rule_decision.invalid_waybill_no,
+                }
             )
-            if is_switch:
-                state.reset_scene()
-                state.owner_hash = owner_hash
-                state.language = decision.language
-
-            self._update_pending_intents(state, decision, request.message)
-
-            if (
-                decision.intent_relation == IntentRelation.ALTERNATIVE
-                and decision.secondary_intents
-            ):
-                choices = [
-                    intent
-                    for intent in [decision.intent, *decision.secondary_intents]
-                    if intent is not None
-                ]
-                state.reset_scene()
-                state.current_intent = Intent.FALLBACK
-                state.language = decision.language
-                self.scenes.collect(state, "waiting_intent")
-                response = self._response(
-                    state,
-                    trace_id,
-                    self.responses.intent_choice(state.language, choices),
-                    action_required="choose_intent",
-                    data={"intent_choices": [intent.value for intent in choices]},
-                )
-            elif decision.cancel_requested and not is_switch:
-                state.reset_scene(status=SceneStatus.CANCELLED)
-                response = self._response(
-                    state, trace_id, self.responses.render(state.language, "cancelled")
-                )
-            elif decision.human_requested:
-                response = await self._transfer(state, context, reason="user_requested")
-            elif decision.invalid_waybill_no:
-                response = self._invalid_waybill(
-                    state,
-                    trace_id,
-                    decision.invalid_waybill_no,
-                    decision.intent,
-                )
-            elif (
-                state.scene_status == SceneStatus.WAITING_CONFIRMATION
-                and state.pending_confirmation
-            ):
-                response = await self._handle_confirmation(
-                    state, decision, context, request.message
-                )
-            elif state.active and decision.intent == Intent.CONVERSATION:
-                response = self._active_conversation(state, context.trace_id, request.message)
-            else:
-                response = await self._dispatch(state, decision, context, request.message)
-
-            response = await self._advance_pending_intents(
-                state,
-                response,
-                context,
+        if rule_decision.semantic_conflict:
+            mentioned = [
+                intent
+                for intent in [rule_decision.intent, *rule_decision.secondary_intents]
+                if intent is not None
+            ]
+            decision = RouteDecision(
+                intent=Intent.FALLBACK,
+                language=rule_decision.language,
+                clarify_question=self.responses.semantic_clarification(
+                    rule_decision.language,
+                    mentioned,
+                ),
             )
+        return decision
 
-            if (
-                self.response_generator is not None
-                and response.status == SceneStatus.COMPLETED
-                and response.action_required is None
-            ):
-                generated_reply = await self.response_generator(
-                    request.message, state, response, context
-                )
-                if generated_reply:
-                    response.reply = generated_reply
-            state.append_turn(request.message, response.reply)
-
-            logger.info(
-                "conversation trace_id=%s session_id=%s user_id=%s selected_skill=%s "
-                "current_step=%s state_transition=%s total_latency_ms=%.2f",
-                trace_id,
-                request.session_id,
-                mask_user_id(request.user_id),
-                response.current_intent,
-                response.current_step,
-                response.status,
-                (perf_counter() - started) * 1000,
-            )
-            return response
-
-    def _should_use_model_router(
+    def should_use_model_router(
         self, state: ConversationState, rule_decision: RouteDecision
     ) -> bool:
         if self.model_router is None:
@@ -308,6 +201,115 @@ class ConversationService:
             return False
 
         return self.settings.model_routing_mode == "new_scene" or rule_decision.intent is None
+
+    async def execute_decision(
+        self,
+        request: ChatRequest,
+        state: ConversationState,
+        context: RequestContext,
+        decision: RouteDecision,
+        *,
+        started: float,
+    ) -> ChatResponse:
+        state.language = decision.language
+        existing_waybill = state.slots.get("waybill_no") or state.last_waybill_no
+        if (
+            not state.active
+            and not decision.waybill_no
+            and not decision.invalid_waybill_no
+            and existing_waybill
+            and decision.intent in WAYBILL_INTENTS
+        ):
+            # A related follow-up reuses the known shipment unless the user supplies a new one.
+            decision = decision.model_copy(update={"waybill_no": existing_waybill})
+        existing_ticket = state.slots.get("ticket_id") or state.last_ticket_id
+        if not decision.ticket_id and existing_ticket and decision.intent == Intent.QUERY_COMPLAINT:
+            decision = decision.model_copy(update={"ticket_id": existing_ticket})
+        if decision.waybill_no and existing_waybill and decision.waybill_no != existing_waybill:
+            # Identity and address data are shipment-specific and must never carry over.
+            state.slots["phone_last4"] = None
+            state.slots["new_address"] = None
+            state.scene_context = {}
+        previous_intent = state.current_intent
+        is_switch = bool(
+            state.active
+            and decision.explicit_intent
+            and decision.intent
+            and decision.intent != Intent.CONVERSATION
+            and decision.intent != previous_intent
+        )
+        if is_switch:
+            owner_hash = state.owner_hash
+            state.reset_scene()
+            state.owner_hash = owner_hash
+            state.language = decision.language
+
+        self._update_pending_intents(state, decision, request.message)
+
+        if decision.intent_relation == IntentRelation.ALTERNATIVE and decision.secondary_intents:
+            choices = [
+                intent
+                for intent in [decision.intent, *decision.secondary_intents]
+                if intent is not None
+            ]
+            state.reset_scene()
+            state.current_intent = Intent.FALLBACK
+            state.language = decision.language
+            self.scenes.collect(state, "waiting_intent")
+            response = self._response(
+                state,
+                context.trace_id,
+                self.responses.intent_choice(state.language, choices),
+                action_required="choose_intent",
+                data={"intent_choices": [intent.value for intent in choices]},
+            )
+        elif decision.cancel_requested and not is_switch:
+            state.reset_scene(status=SceneStatus.CANCELLED)
+            response = self._response(
+                state, context.trace_id, self.responses.render(state.language, "cancelled")
+            )
+        elif decision.human_requested:
+            response = await self._transfer(state, context, reason="user_requested")
+        elif decision.invalid_waybill_no:
+            response = self._invalid_waybill(
+                state,
+                context.trace_id,
+                decision.invalid_waybill_no,
+                decision.intent,
+            )
+        elif state.scene_status == SceneStatus.WAITING_CONFIRMATION and state.pending_confirmation:
+            response = await self._handle_confirmation(state, decision, context, request.message)
+        elif state.active and decision.intent == Intent.CONVERSATION:
+            response = self._active_conversation(state, context.trace_id, request.message)
+        else:
+            response = await self._dispatch(state, decision, context, request.message)
+
+        response = await self._advance_pending_intents(state, response, context)
+
+        if (
+            self.response_generator is not None
+            and response.status == SceneStatus.COMPLETED
+            and response.action_required is None
+        ):
+            generated_reply = await self.response_generator(
+                request.message, state, response, context
+            )
+            if generated_reply:
+                response.reply = generated_reply
+        state.append_turn(request.message, response.reply)
+
+        logger.info(
+            "conversation trace_id=%s session_id=%s user_id=%s selected_skill=%s "
+            "current_step=%s state_transition=%s total_latency_ms=%.2f",
+            context.trace_id,
+            request.session_id,
+            mask_user_id(request.user_id),
+            response.current_intent,
+            response.current_step,
+            response.status,
+            (perf_counter() - started) * 1000,
+        )
+        return response
 
     @staticmethod
     def _update_pending_intents(

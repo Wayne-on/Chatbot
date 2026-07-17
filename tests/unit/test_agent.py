@@ -1,11 +1,11 @@
 from customer_service_agent.agent import CustomerServiceAgent
 from customer_service_agent.api.dependencies import build_container
 from customer_service_agent.config import Settings
-from customer_service_agent.schemas import Intent, RequestContext, SceneStatus
+from customer_service_agent.schemas import Intent, ModelUnderstanding, RequestContext, SceneStatus
 from customer_service_agent.state import ConversationState
 
 
-def test_optional_deepagents_runtime_builds_without_network_call() -> None:
+def test_optional_langgraph_runtime_builds_without_network_call() -> None:
     container = build_container(
         Settings(
             model_name="gpt-4o-mini",
@@ -13,8 +13,15 @@ def test_optional_deepagents_runtime_builds_without_network_call() -> None:
             model_base_url="https://example.invalid/v1",
         )
     )
-    assert container.agent.deep_agent is not None
-    assert type(container.agent.deep_agent).__name__ == "CompiledStateGraph"
+    assert container.agent.semantic_model is not None
+    assert type(container.agent.graph).__name__ == "CompiledStateGraph"
+    assert set(container.agent.graph.get_graph().nodes) >= {
+        "load_session",
+        "deterministic_router",
+        "semantic_router",
+        "resolve_decision",
+        "execute_business",
+    }
 
 
 def test_model_context_contains_business_summary_but_not_sensitive_slots() -> None:
@@ -47,9 +54,10 @@ def test_model_context_contains_business_summary_but_not_sensitive_slots() -> No
 
 
 def test_plain_text_reply_removes_markdown_markers() -> None:
-    assert CustomerServiceAgent._plain_text_reply(
-        "已创建工单 **CMP1234567890**，请保留 `ticket_id`。"
-    ) == "已创建工单 CMP1234567890，请保留 ticket_id。"
+    assert (
+        CustomerServiceAgent._plain_text_reply("已创建工单 **CMP1234567890**，请保留 `ticket_id`。")
+        == "已创建工单 CMP1234567890，请保留 ticket_id。"
+    )
 
 
 def test_only_identifiers_in_safe_draft_are_required_in_rewrite() -> None:
@@ -60,7 +68,7 @@ def test_only_identifiers_in_safe_draft_are_required_in_rewrite() -> None:
 
 
 async def test_model_connection_failure_opens_short_cooldown(container) -> None:
-    class FailingDeepAgent:
+    class FailingSemanticModel:
         def __init__(self) -> None:
             self.calls = 0
 
@@ -68,8 +76,8 @@ async def test_model_connection_failure_opens_short_cooldown(container) -> None:
             self.calls += 1
             raise ConnectionError("offline")
 
-    failing = FailingDeepAgent()
-    container.agent.deep_agent = failing
+    failing = FailingSemanticModel()
+    container.agent.semantic_model = failing
     container.agent.settings.model_failure_cooldown_seconds = 30
     context = RequestContext(
         session_id="cooldown",
@@ -78,13 +86,52 @@ async def test_model_connection_failure_opens_short_cooldown(container) -> None:
         trace_id="t1",
     )
 
-    first = await container.agent._route_with_deep_agent(
+    first = await container.agent._route_with_langgraph_model(
         "ambiguous request", ConversationState(), context
     )
-    second = await container.agent._route_with_deep_agent(
+    second = await container.agent._route_with_langgraph_model(
         "another ambiguous request", ConversationState(), context
     )
 
     assert first is None
     assert second is None
     assert failing.calls == 1
+
+
+async def test_semantic_model_retries_one_structured_parse_failure(container) -> None:
+    class RetryingSemanticModel:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def ainvoke(self, messages):  # type: ignore[no-untyped-def]
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "raw": None,
+                    "parsed": None,
+                    "parsing_error": ValueError("invalid structured output"),
+                }
+            return {
+                "raw": None,
+                "parsed": ModelUnderstanding(intent=Intent.TRACKING, language="zh"),
+                "parsing_error": None,
+            }
+
+    semantic_model = RetryingSemanticModel()
+    container.agent.semantic_model = semantic_model
+    context = RequestContext(
+        session_id="parse-retry",
+        user_id="u1",
+        request_id="r1",
+        trace_id="t1",
+    )
+
+    decision = await container.agent._route_with_langgraph_model(
+        "查一下快递",
+        ConversationState(),
+        context,
+    )
+
+    assert decision is not None
+    assert decision.intent == Intent.TRACKING
+    assert semantic_model.calls == 2
