@@ -11,7 +11,7 @@
 | `if_route_tool` | 四种工具分流 | `resolve_decision -> execute_business`，再由 SceneManager 选择 Skill 与 Tool | 编排 | 是 | 简单路径确定性执行 |
 | `code_mock_tools` | 模拟业务调用 | Pydantic Tools -> `BusinessBackend` | Tool/Adapter | 否 | 统一 ToolResult、trace、耗时 |
 | `assign_tool_memory` | 保存工具摘要 | `last_tool_result` / `scene_context` | State | 是 | 保存脱敏结构化结果 |
-| `llm_final_reply` | 根据工具结果生成三语回复 | DeepSeek 结合当前问题、历史、Skill、业务 State 和完整 Tool 数据生成；模板降级 | 回复 | 是 | 校验业务标识符；工具失败不得生成业务事实 |
+| `llm_final_reply` | 根据工具结果生成三语回复 | LangGraph `response_writer` 结合当前问题、历史、Skill、业务 State 和完整 Tool 数据生成；模板降级 | 回复 | 是 | 校验业务标识符；工具失败不得生成业务事实 |
 | `knowledge_policy` | 模拟 FAQ 检索 | `retrieve_faq` + Knowledge Adapter | Tool | 否 | 当前仍为 mock，便于替换 RAG/MCP |
 | `llm_no_tool_reply` | 基于知识或上下文回复 | FAQ 检索；问候/夸奖/短反应/历史统计由 conversation 场景处理；可选模型润色 | Skill/回复 | 是 | 模型不可用时仍保留三语确定性回复 |
 | `answer_final` / `answer_no_tool` | 字符串输出 | `ChatResponse` | API | 否 | Demo 保留内部状态字段 |

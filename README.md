@@ -2,7 +2,7 @@
 
 这是一个从 Dify DSL 重新组织而来的三语（中文、越南语、英语）物流客服 Demo。当前分支使用外层 LangGraph 编排确定性节点和模型节点，显式步骤机管理多轮业务状态，Pydantic Tools 负责校验，Adapter 负责最终业务调用。`main` 分支保留功能相同的 DeepAgents 实现，便于对比。
 
-当前 Demo 使用 `DeepSeek-V4-Flash` 驱动 LangGraph 的语义节点，业务接口继续使用 `MockBackend`。Graph 明确执行 `load_session -> deterministic_router -> semantic_router（按需） -> resolve_decision -> execute_business`；语义节点结合最近六组真实对话和业务 State 输出主/次意图、关系和槽位。明确的运单号、手机号后四位、确认或取消走确定性快速路径。多个诉求共用已验证槽位，并由一个活动场景加待办队列顺序完成。Tool 执行完成后，DeepSeek 再结合当前问题、历史、对应 Skill 和真实结果生成自然回复。业务写操作始终由状态机守门，模型不可直接执行。
+当前 Demo 使用 `DeepSeek-V4-Flash` 驱动 LangGraph 的语义与回复节点，业务接口继续使用 `MockBackend`。Graph 明确执行 `load_session -> deterministic_router -> semantic_router（按需） -> resolve_decision -> execute_business -> response_writer -> save_turn`；语义节点结合最近六组真实对话和业务 State 输出主/次意图、关系和槽位。自然语言轮次按 DSL 基线结合历史请求模型理解，纯运单号、手机号后四位、确认或取消走确定性快速路径。多个诉求共用已验证槽位，并由一个活动场景加待办队列顺序完成。Tool 执行完成后，DeepSeek 再结合当前问题、历史、对应 Skill 和真实结果生成自然回复。业务写操作始终由状态机守门，模型不可直接执行。
 
 ## 已实现
 
@@ -106,7 +106,7 @@ MODEL_THINKING_ENABLED=false
 MODEL_ROUTING_MODE=new_scene
 ```
 
-高置信度单一业务短语、明确槽位、确认/取消、问候和夸奖由 Graph 走确定性路径并跳过模型节点；多个意图、否定/纠正、歧义表达、复杂追问或场景切换进入 `semantic_router`。`MODEL_ROUTING_MODE=ambiguous_only` 可进一步限制普通模型路由，但多意图与语义冲突仍优先请求模型。客服路由关闭 DeepSeek 默认思考模式以降低延迟；连接失败后按 `MODEL_FAILURE_COOLDOWN_SECONDS` 暂停重试，清晰的多意图按用户提及顺序安全推进，带否定或冲突的表达保守澄清。
+`MODEL_ROUTING_MODE=new_scene` 与 DSL 一样让自然语言轮次结合历史进入 `semantic_router`；纯标识符、明确槽位、确认/取消仍走确定性快速路径。`MODEL_ROUTING_MODE=ambiguous_only` 可限制普通模型路由，但多意图与语义冲突仍优先请求模型。客服路由关闭 DeepSeek 默认思考模式以降低延迟；结构化输出会兼容模型常见的字符串 `null`，路由和回复分别熔断，避免一次解析失败让整段对话都退化成模板。清晰的多意图按用户提及顺序安全推进，带否定或冲突的表达保守澄清。
 
 模型客户端只在 Agent 层初始化。语义节点使用从 Skills 提炼的紧凑场景目录，生成最终回复时只读取当前场景的完整 `SKILL.md`。`ConversationCheckpointer` 是唯一持久会话状态源，Graph 的单轮运行状态只保存请求、规则决策、模型决策和最终响应；需要语义理解时显式传入最近消息及脱敏业务摘要。模型只输出受 Pydantic 约束的计划和 Tool 建议，不直接获得任何业务 Tool；所有查询和写入都由服务层验证后唯一执行，写操作还必须经过确认、业务复核、幂等与审计路径。
 

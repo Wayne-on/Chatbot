@@ -51,6 +51,7 @@ class ConversationState(BaseModel):
     waybill_history: list[str] = Field(default_factory=list)
     valid_waybill_history: list[str] = Field(default_factory=list)
     ticket_history: list[str] = Field(default_factory=list)
+    last_business_reason: str | None = None
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     @property
@@ -120,6 +121,7 @@ class ConversationState(BaseModel):
         self.waybill_history = []
         self.valid_waybill_history = []
         self.ticket_history = []
+        self.last_business_reason = None
 
 
 class ConversationCheckpointer(Protocol):

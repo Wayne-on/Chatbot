@@ -21,6 +21,8 @@ def test_optional_langgraph_runtime_builds_without_network_call() -> None:
         "semantic_router",
         "resolve_decision",
         "execute_business",
+        "response_writer",
+        "save_turn",
     }
 
 
@@ -43,12 +45,16 @@ def test_model_context_contains_business_summary_but_not_sensitive_slots() -> No
         "status": "in_transit",
         "current_node": "Shanghai Transfer Center",
     }
+    state.last_business_reason = "User wants to understand the current delivery delay"
     context = build_container(
         Settings(_env_file=None, model_name=None, model_api_key=None)
     ).agent._safe_conversation_context(state)
     rendered = str(context)
     assert context["known_slots"]["waybill_no"] == "JT123456781"
     assert context["last_tool_result"]["status"] == "in_transit"
+    assert context["last_business_reason"] == (
+        "User wants to understand the current delivery delay"
+    )
     assert "84912345678" not in rendered
     assert "Sensitive address" not in rendered
 
@@ -65,6 +71,26 @@ def test_only_identifiers_in_safe_draft_are_required_in_rewrite() -> None:
     assert CustomerServiceAgent._required_identifiers(
         data, "工单 CMP1234567890 当前正在处理中。"
     ) == {"CMP1234567890"}
+
+
+def test_model_understanding_normalizes_provider_null_strings() -> None:
+    understanding = ModelUnderstanding.model_validate(
+        {
+            "intent": "tracking",
+            "language": "zh",
+            "waybill_no": "null",
+            "phone_last4": "",
+            "ticket_id": "None",
+            "new_address": "N/A",
+            "recommended_tool": "null",
+        }
+    )
+
+    assert understanding.waybill_no is None
+    assert understanding.phone_last4 is None
+    assert understanding.ticket_id is None
+    assert understanding.new_address is None
+    assert understanding.recommended_tool is None
 
 
 async def test_model_connection_failure_opens_short_cooldown(container) -> None:
@@ -96,6 +122,7 @@ async def test_model_connection_failure_opens_short_cooldown(container) -> None:
     assert first is None
     assert second is None
     assert failing.calls == 1
+    assert not container.agent._model_in_cooldown("response")
 
 
 async def test_semantic_model_retries_one_structured_parse_failure(container) -> None:

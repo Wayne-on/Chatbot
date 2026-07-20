@@ -170,6 +170,27 @@ class ModelUnderstanding(BaseModel):
         | None
     ) = None
 
+    @field_validator(
+        "intent_condition",
+        "waybill_no",
+        "phone_last4",
+        "ticket_id",
+        "new_address",
+        "clarify_question",
+        "business_reason",
+        "recommended_tool",
+        mode="before",
+    )
+    @classmethod
+    def normalize_model_nulls(cls, value: Any) -> Any:
+        """Providers sometimes serialize an absent optional field as the string null."""
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped.lower() in {"", "null", "none", "n/a"}:
+                return None
+            return stripped
+        return value
+
 
 class PendingIntent(BaseModel):
     """A recognized user goal waiting behind the single authoritative active scene."""

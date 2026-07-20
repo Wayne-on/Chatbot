@@ -5,7 +5,7 @@
 | 维度 | `main` DeepAgents | `langgraph-implementation` |
 | --- | --- | --- |
 | 核心入口 | `create_deep_agent` | 显式 `StateGraph` |
-| 流程表达 | Agent runtime + 业务步骤机 | 五个命名节点 + 条件边 + 业务步骤机 |
+| 流程表达 | Agent runtime + 业务步骤机 | 七个命名节点 + 条件边 + 业务步骤机 |
 | 语义输出 | DeepAgents structured response | Chat model structured output |
 | Skill 使用 | Agent runtime 能力与精简目录 | Prompt 目录 + 按场景读取完整 Skill |
 | Tool 权限 | 不向 Agent 开放业务 Tool | 不向语义节点开放业务 Tool |

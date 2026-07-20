@@ -62,6 +62,7 @@ def test_new_owner_clear_removes_history_and_scene_data() -> None:
     state = ConversationState(current_intent=Intent.TRACKING)
     state.slots["waybill_no"] = "JT123456781"
     state.last_tool_result = {"status": "delivered"}
+    state.last_business_reason = "Track a delayed parcel"
     state.remember_waybill("JT123456781")
     state.remember_ticket("CMP1234567890")
     state.append_turn("查快递", "请提供运单号")
@@ -74,6 +75,7 @@ def test_new_owner_clear_removes_history_and_scene_data() -> None:
     assert state.waybill_history == []
     assert state.valid_waybill_history == []
     assert state.ticket_history == []
+    assert state.last_business_reason is None
 
 
 def test_waybill_history_keeps_invalid_attempts_but_reuses_only_valid_values() -> None:

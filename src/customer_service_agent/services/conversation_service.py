@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from time import perf_counter
 from typing import Any
@@ -81,7 +82,7 @@ class ConversationService:
             self.prepare_state(state, request.user_id)
             rule_decision = self.route_deterministically(request, state)
             model_decision: RouteDecision | None = None
-            if self.should_use_model_router(state, rule_decision):
+            if self.should_use_model_router(state, rule_decision, request.message):
                 assert self.model_router is not None
                 model_decision = await self.model_router(request.message, state, context)
             decision = self.resolve_decision(rule_decision, model_decision)
@@ -173,21 +174,23 @@ class ConversationService:
         return decision
 
     def should_use_model_router(
-        self, state: ConversationState, rule_decision: RouteDecision
+        self,
+        state: ConversationState,
+        rule_decision: RouteDecision,
+        message: str,
     ) -> bool:
         if self.model_router is None:
             return False
         if rule_decision.invalid_waybill_no:
             return False
-        if rule_decision.secondary_intents or rule_decision.semantic_conflict:
-            # Natural-language multi-intent, negation, and correction need contextual semantics.
-            return True
         if state.scene_status == SceneStatus.WAITING_CONFIRMATION:
             return False
-        if rule_decision.cancel_requested or rule_decision.human_requested:
-            return False
-        if rule_decision.explicit_intent:
-            # High-confidence keyword/phrase routes stay useful even during a model outage.
+        if (
+            rule_decision.cancel_requested
+            or rule_decision.human_requested
+            or rule_decision.confirmation
+            or rule_decision.rejection
+        ):
             return False
         # A value that exactly satisfies the requested slot should stay deterministic and cheap.
         deterministic_slots = {
@@ -199,8 +202,28 @@ class ConversationService:
         }
         if state.active and deterministic_slots.get(state.current_step or "", False):
             return False
+        if self._is_identifier_only(message, rule_decision):
+            return False
+        if rule_decision.secondary_intents or rule_decision.semantic_conflict:
+            # Natural-language multi-intent, negation, and correction need contextual semantics.
+            return True
+        if self.settings.model_routing_mode == "new_scene":
+            # Match the source DSL: every natural-language turn is understood with recent history.
+            # The rule route remains the validated fallback and skips only exact deterministic values.
+            return True
+        if rule_decision.explicit_intent:
+            return False
 
-        return self.settings.model_routing_mode == "new_scene" or rule_decision.intent is None
+        return rule_decision.intent is None
+
+    @staticmethod
+    def _is_identifier_only(message: str, decision: RouteDecision) -> bool:
+        compact = re.sub(r"[\s-]", "", message).upper()
+        if decision.waybill_no and compact == decision.waybill_no:
+            return True
+        if decision.ticket_id and compact == re.sub(r"[\s-]", "", decision.ticket_id).upper():
+            return True
+        return bool(decision.phone_last4 and compact == decision.phone_last4)
 
     async def execute_decision(
         self,
@@ -210,8 +233,12 @@ class ConversationService:
         decision: RouteDecision,
         *,
         started: float,
+        generate_reply: bool = True,
+        finalize: bool = True,
     ) -> ChatResponse:
         state.language = decision.language
+        if decision.business_reason:
+            state.last_business_reason = decision.business_reason
         existing_waybill = state.slots.get("waybill_no") or state.last_waybill_no
         if (
             not state.active
@@ -287,7 +314,8 @@ class ConversationService:
         response = await self._advance_pending_intents(state, response, context)
 
         if (
-            self.response_generator is not None
+            generate_reply
+            and self.response_generator is not None
             and response.status == SceneStatus.COMPLETED
             and response.action_required is None
         ):
@@ -296,6 +324,19 @@ class ConversationService:
             )
             if generated_reply:
                 response.reply = generated_reply
+        if finalize:
+            self.finalize_turn(request, state, response, context, started=started)
+        return response
+
+    @staticmethod
+    def finalize_turn(
+        request: ChatRequest,
+        state: ConversationState,
+        response: ChatResponse,
+        context: RequestContext,
+        *,
+        started: float,
+    ) -> None:
         state.append_turn(request.message, response.reply)
 
         logger.info(
@@ -309,7 +350,6 @@ class ConversationService:
             response.status,
             (perf_counter() - started) * 1000,
         )
-        return response
 
     @staticmethod
     def _update_pending_intents(
@@ -538,10 +578,17 @@ class ConversationService:
         phone_last4 = state.slots.get("phone_last4")
         if not phone_last4:
             self.scenes.collect(state, "waiting_phone_last4")
+            pod = data.get("pod") or {}
+            pod_values = self.responses.pod_values(state.language, pod)
             return self._response(
                 state,
                 context.trace_id,
-                self.responses.render(state.language, "ask_phone_last4"),
+                self.responses.render(
+                    state.language,
+                    "ask_phone_last4_with_pod",
+                    waybill=waybill,
+                    **pod_values,
+                ),
                 action_required="provide_phone_last4",
                 data={"tracking": self._safe_tracking(data)},
             )
@@ -619,6 +666,8 @@ class ConversationService:
             "confirm_followup",
             status=tracking_values["status"],
             waybill=waybill,
+            node=tracking_values["node"],
+            eta=tracking_values["eta"],
         )
         return self._response(
             state,
@@ -905,7 +954,11 @@ class ConversationService:
             return self._response(
                 state,
                 context.trace_id,
-                self.responses.render(state.language, "repeat_confirmation"),
+                self.responses.render(
+                    state.language,
+                    "repeat_confirmation",
+                    waybill=state.pending_confirmation.arguments.get("waybill_no", ""),
+                ),
                 action_required="confirm_action",
                 data={
                     "tool": state.pending_confirmation.tool,

@@ -11,6 +11,7 @@ from customer_service_agent.schemas import (
     ChatResponse,
     RequestContext,
     RouteDecision,
+    SceneStatus,
 )
 from customer_service_agent.services.conversation_service import ConversationService
 from customer_service_agent.state import ConversationState
@@ -44,6 +45,8 @@ class CustomerServiceWorkflow:
         builder.add_node("semantic_router", self._semantic_router)
         builder.add_node("resolve_decision", self._resolve_decision)
         builder.add_node("execute_business", self._execute_business)
+        builder.add_node("response_writer", self._response_writer)
+        builder.add_node("save_turn", self._save_turn)
 
         builder.add_edge(START, "load_session")
         builder.add_edge("load_session", "deterministic_router")
@@ -57,7 +60,9 @@ class CustomerServiceWorkflow:
         )
         builder.add_edge("semantic_router", "resolve_decision")
         builder.add_edge("resolve_decision", "execute_business")
-        builder.add_edge("execute_business", END)
+        builder.add_edge("execute_business", "response_writer")
+        builder.add_edge("response_writer", "save_turn")
+        builder.add_edge("save_turn", END)
         return builder.compile()
 
     async def ainvoke(
@@ -107,6 +112,7 @@ class CustomerServiceWorkflow:
         if self.service.should_use_model_router(
             state["conversation"],
             state["rule_decision"],
+            state["request"].message,
         ):
             return "semantic_router"
         return "resolve_decision"
@@ -141,8 +147,41 @@ class CustomerServiceWorkflow:
             state["context"],
             state["decision"],
             started=state["started"],
+            generate_reply=False,
+            finalize=False,
         )
         return {
             "conversation": state["conversation"],
             "response": response,
+        }
+
+    async def _response_writer(self, state: CustomerServiceGraphState) -> CustomerServiceGraphState:
+        response = state["response"]
+        generator = self.service.response_generator
+        if (
+            generator is not None
+            and response.status == SceneStatus.COMPLETED
+            and response.action_required is None
+        ):
+            generated = await generator(
+                state["request"].message,
+                state["conversation"],
+                response,
+                state["context"],
+            )
+            if generated:
+                response = response.model_copy(update={"reply": generated})
+        return {"response": response}
+
+    async def _save_turn(self, state: CustomerServiceGraphState) -> CustomerServiceGraphState:
+        self.service.finalize_turn(
+            state["request"],
+            state["conversation"],
+            state["response"],
+            state["context"],
+            started=state["started"],
+        )
+        return {
+            "conversation": state["conversation"],
+            "response": state["response"],
         }

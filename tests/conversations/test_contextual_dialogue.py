@@ -28,7 +28,8 @@ async def test_user_reported_dialogue_remains_contextual_without_model(container
 
     hesitation = await send(container, session_id, "额")
     assert hesitation.status == SceneStatus.WAITING_CONFIRMATION
-    assert "还没有提交" in hesitation.reply
+    assert "尚未提交" in hesitation.reply
+    assert "JT123456781" in hesitation.reply
 
     urged = await send(container, session_id, "能快些吗")
     assert urged.status == SceneStatus.COMPLETED

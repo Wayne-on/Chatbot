@@ -15,6 +15,8 @@ async def test_delivered_not_received_requires_identity_and_confirmation(
     )
     assert second.status == SceneStatus.COLLECTING
     assert second.action_required == "provide_phone_last4"
+    assert "JT123456785" in second.reply
+    assert "门卫/前台" in second.reply
 
     third = await container.agent.ainvoke(
         ChatRequest(session_id="dnr-1", user_id="u1", message="1234")

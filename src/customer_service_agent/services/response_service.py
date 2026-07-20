@@ -111,6 +111,12 @@ ADDRESS_REASON_LABELS = {
     "en": {},
 }
 
+POD_SIGNER_LABELS = {
+    "zh": {"security/front desk": "门卫/前台"},
+    "vi": {"security/front desk": "bảo vệ/quầy lễ tân"},
+    "en": {},
+}
+
 TEMPLATES: dict[str, dict[str, str]] = {
     "ask_waybill": {
         "zh": "为了继续处理，请提供运单号。J&T 运单号通常以 JT 开头。",
@@ -136,6 +142,11 @@ TEMPLATES: dict[str, dict[str, str]] = {
         "zh": "轨迹显示该运单已签收。为核验收件人身份，请提供收件手机号后四位。",
         "vi": "Tracking cho thấy bưu kiện đã được giao. Để xác minh người nhận, vui lòng cung cấp 4 số cuối của số điện thoại nhận hàng.",
         "en": "Tracking shows the parcel was delivered. Please provide the last four digits of the recipient phone number for verification.",
+    },
+    "ask_phone_last4_with_pod": {
+        "zh": "抱歉给您带来困扰。运单 {waybill} 的轨迹记录为已签收，签收时间是 {signed_time}，签收人/地点记录为 {signer}。如果您本人仍未收到，我可以继续协助核实；为验证收件人身份，请提供收件手机号后四位。",
+        "vi": "Xin lỗi vì sự bất tiện. Tracking của vận đơn {waybill} ghi nhận đã giao lúc {signed_time}, người/địa điểm ký nhận là {signer}. Nếu bạn vẫn chưa nhận được, tôi có thể tiếp tục hỗ trợ xác minh; vui lòng cung cấp 4 số cuối của số điện thoại người nhận.",
+        "en": "Sorry for the concern. Tracking for {waybill} records delivery at {signed_time}, with the signer/location shown as {signer}. If you still have not received it, I can continue the investigation after you provide the last four digits of the recipient phone number.",
     },
     "not_delivered": {
         "zh": "我查到该运单目前为{status}，最新节点是{node}，并不是已签收状态，因此暂时不能按“签收未收到”处理。",
@@ -173,9 +184,9 @@ TEMPLATES: dict[str, dict[str, str]] = {
         "en": "Sorry for the wait. Waybill {waybill} is {status}, most recently at {node}. {eta} Tracking is still updating, so a formal follow-up cannot be submitted yet; if there is no new scan for 48 hours, I can help request verification.",
     },
     "confirm_followup": {
-        "zh": "轨迹显示 {status}。将为运单 {waybill} 提交正式催件/核实请求。请明确回复“确认”或“取消”。",
-        "vi": "Tracking cho thấy {status}. Hệ thống sẽ gửi yêu cầu giục giao/xác minh chính thức cho {waybill}. Vui lòng trả lời “xác nhận” hoặc “hủy”.",
-        "en": "Tracking shows {status}. I am ready to submit a formal delivery follow-up for {waybill}. Reply “confirm” or “cancel”.",
+        "zh": "抱歉让您久等了。我记得您查询的是运单 {waybill}，目前为{status}，最新节点是{node}。{eta} 我可以现在提交正式催件/核实请求；为避免重复建单，请回复“确认”或“取消”。",
+        "vi": "Xin lỗi vì đã để bạn chờ. Tôi nhớ bạn đang hỏi vận đơn {waybill}, hiện {status}, điểm mới nhất là {node}. {eta} Tôi có thể gửi yêu cầu giục giao/xác minh ngay; để tránh tạo phiếu trùng, vui lòng trả lời “xác nhận” hoặc “hủy”.",
+        "en": "Sorry for the wait. I remember you are asking about waybill {waybill}, currently {status}, most recently at {node}. {eta} I can submit a formal delivery follow-up now; to avoid a duplicate ticket, reply “confirm” or “cancel”.",
     },
     "followup_created": {
         "zh": "催件请求已提交，工单号 {ticket_id}。网点预计会在 24 小时内核实，请保持电话畅通并留意后续轨迹。",
@@ -233,9 +244,9 @@ TEMPLATES: dict[str, dict[str, str]] = {
         "en": "The action was cancelled; no business change was submitted.",
     },
     "repeat_confirmation": {
-        "zh": "我还没有提交这次操作。为避免误操作或重复建单，请明确回复“确认”执行，或回复“取消”。",
-        "vi": "Tôi chưa gửi thao tác này. Để tránh thao tác nhầm hoặc tạo phiếu trùng, vui lòng trả lời “xác nhận” để thực hiện hoặc “hủy”.",
-        "en": "I have not submitted the action yet. To avoid mistakes or duplicate tickets, reply “confirm” to proceed or “cancel”.",
+        "zh": "我还在跟进运单 {waybill}，当前操作尚未提交。为避免误操作或重复建单，请回复“确认”执行，或回复“取消”。",
+        "vi": "Tôi vẫn đang theo dõi vận đơn {waybill}; thao tác hiện chưa được gửi. Để tránh nhầm hoặc tạo phiếu trùng, vui lòng trả lời “xác nhận” hoặc “hủy”.",
+        "en": "I am still following waybill {waybill}; the action has not been submitted yet. To avoid mistakes or a duplicate ticket, reply “confirm” or “cancel”.",
     },
     "tool_failed": {
         "zh": "业务服务暂时不可用，本次没有生成任何业务结果。请稍后重试，或联系人工客服。参考码：{error_code}",
@@ -272,6 +283,17 @@ class ResponseService:
         return {
             "status": TRACKING_STATUS_LABELS[language].get(status_code, status_code),
             "reason": ADDRESS_REASON_LABELS[language].get(reason_code, reason_code),
+        }
+
+    def pod_values(self, language: str, data: dict[str, Any]) -> dict[str, str]:
+        language = language if language in {"en", "vi", "zh"} else "en"
+        signed_time = str(data.get("signed_time") or "unknown")
+        if signed_time != "unknown":
+            signed_time = signed_time.replace("T", " ").replace("+00:00", " UTC")
+        signer_code = str(data.get("signer") or "unknown")
+        return {
+            "signed_time": signed_time,
+            "signer": POD_SIGNER_LABELS[language].get(signer_code, signer_code),
         }
 
     def planned_prompt(

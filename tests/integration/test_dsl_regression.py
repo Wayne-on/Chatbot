@@ -24,3 +24,5 @@ async def test_dsl_regression_cases(container) -> None:
             assert response.status == case["expected_status"], case["name"]
         if "expected_action" in case:
             assert response.action_required == case["expected_action"], case["name"]
+        for expected_text in case.get("expected_reply_contains", []):
+            assert expected_text in response.reply, case["name"]

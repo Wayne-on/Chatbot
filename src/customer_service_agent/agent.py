@@ -48,7 +48,8 @@ class CustomerServiceAgent:
         self.service = service
         self.settings = settings
         self.tools = tools
-        self._model_unavailable_until = 0.0
+        self._routing_unavailable_until = 0.0
+        self._response_unavailable_until = 0.0
         self.response_model: Any | None = None
         self.semantic_model: Any | None = None
         if settings.model_enabled:
@@ -69,13 +70,34 @@ class CustomerServiceAgent:
         state: ConversationState,
         context: RequestContext,
     ) -> RouteDecision | None:
-        if self.semantic_model is None or self._model_in_cooldown():
+        if self.semantic_model is None or self._model_in_cooldown("routing"):
             return None
         started = perf_counter()
         try:
             understanding: ModelUnderstanding | None = None
             raw_message: Any | None = None
             state_context = self._safe_conversation_context(state)
+            deterministic_hint = self.service.router.route(
+                message,
+                requested_language=None,
+                state=state,
+            )
+            hint_context = {
+                "intent": (deterministic_hint.intent.value if deterministic_hint.intent else None),
+                "secondary_intents": [
+                    intent.value for intent in deterministic_hint.secondary_intents
+                ],
+                "language": deterministic_hint.language,
+                "waybill_no": deterministic_hint.waybill_no,
+                "invalid_waybill_no": deterministic_hint.invalid_waybill_no,
+                "phone_last4": deterministic_hint.phone_last4,
+                "ticket_id": deterministic_hint.ticket_id,
+                "confirmation": deterministic_hint.confirmation,
+                "rejection": deterministic_hint.rejection,
+                "cancel_requested": deterministic_hint.cancel_requested,
+                "human_requested": deterministic_hint.human_requested,
+                "semantic_conflict": deterministic_hint.semantic_conflict,
+            }
             for attempt in range(2):
                 messages: list[dict[str, str]] = [
                     {
@@ -95,6 +117,10 @@ class CustomerServiceAgent:
                             "real dialogue history. Reuse known identifiers unless corrected. "
                             f"Verified business state: "
                             f"{json.dumps(state_context, ensure_ascii=False)}\n"
+                            "Deterministic extraction hint (identifiers are authoritative; "
+                            "semantic intent is only a hint): "
+                            f"{json.dumps(hint_context, ensure_ascii=False)}\n"
+                            "Country/Region: VN\nChannel: app\n"
                             f"Current user message: {message}"
                         ),
                     }
@@ -135,7 +161,7 @@ class CustomerServiceAgent:
                 int(usage.get("output_tokens", 0) or 0),
                 int(usage.get("total_tokens", 0) or 0),
             )
-            self._model_unavailable_until = 0.0
+            self._routing_unavailable_until = 0.0
             return RouteDecision(
                 intent=understanding.intent,
                 secondary_intents=understanding.secondary_intents,
@@ -167,7 +193,7 @@ class CustomerServiceAgent:
                 explicit_intent=not understanding.continuation,
             )
         except Exception:
-            self._mark_model_unavailable()
+            self._mark_model_unavailable("routing")
             logger.exception(
                 "model_routing_failed trace_id=%s model_latency_ms=%.2f",
                 context.trace_id,
@@ -183,7 +209,7 @@ class CustomerServiceAgent:
         context: RequestContext,
     ) -> str | None:
         """Compose a grounded reply after deterministic execution, like the DSL final LLM node."""
-        if self.response_model is None or self._model_in_cooldown():
+        if self.response_model is None or self._model_in_cooldown("response"):
             return None
         if response.status != SceneStatus.COMPLETED or response.action_required is not None:
             return None
@@ -237,10 +263,10 @@ class CustomerServiceAgent:
                 int(usage.get("output_tokens", 0) or 0),
                 int(usage.get("total_tokens", 0) or 0),
             )
-            self._model_unavailable_until = 0.0
+            self._response_unavailable_until = 0.0
             return reply
         except Exception:
-            self._mark_model_unavailable()
+            self._mark_model_unavailable("response")
             logger.exception(
                 "model_reply_failed trace_id=%s model_latency_ms=%.2f",
                 context.trace_id,
@@ -298,13 +324,20 @@ class CustomerServiceAgent:
         """Remove common presentational Markdown that the plain chat UI would show literally."""
         return content.strip().replace("**", "").replace("__", "").replace("`", "")
 
-    def _model_in_cooldown(self) -> bool:
-        return perf_counter() < self._model_unavailable_until
-
-    def _mark_model_unavailable(self) -> None:
-        self._model_unavailable_until = (
-            perf_counter() + self.settings.model_failure_cooldown_seconds
+    def _model_in_cooldown(self, channel: str) -> bool:
+        unavailable_until = (
+            self._routing_unavailable_until
+            if channel == "routing"
+            else self._response_unavailable_until
         )
+        return perf_counter() < unavailable_until
+
+    def _mark_model_unavailable(self, channel: str) -> None:
+        unavailable_until = perf_counter() + self.settings.model_failure_cooldown_seconds
+        if channel == "routing":
+            self._routing_unavailable_until = unavailable_until
+        else:
+            self._response_unavailable_until = unavailable_until
 
     @staticmethod
     def _required_identifiers(data: dict[str, Any], deterministic_draft: str) -> set[str]:
@@ -387,5 +420,6 @@ class CustomerServiceAgent:
             "waybill_history": list(state.waybill_history),
             "valid_waybill_history": list(state.valid_waybill_history),
             "ticket_history": list(state.ticket_history),
+            "last_business_reason": state.last_business_reason,
             "last_tool_result": {key: result.get(key) for key in safe_result_keys if key in result},
         }

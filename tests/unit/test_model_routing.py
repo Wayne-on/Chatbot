@@ -2,6 +2,16 @@ from customer_service_agent.schemas import ChatRequest, Intent, RouteDecision, S
 
 
 async def test_deterministic_route_skips_semantic_langgraph_node(container) -> None:
+    awaiting_waybill = await container.agent.ainvoke(
+        ChatRequest(
+            session_id="graph-fast-path",
+            user_id="u1",
+            message="查快递",
+            language="zh-CN",
+        )
+    )
+    assert awaiting_waybill.action_required == "provide_waybill_no"
+
     calls: list[str] = []
 
     async def model_router(message, state, context):  # type: ignore[no-untyped-def]
@@ -13,7 +23,7 @@ async def test_deterministic_route_skips_semantic_langgraph_node(container) -> N
         ChatRequest(
             session_id="graph-fast-path",
             user_id="u1",
-            message="查快递 JT123456781",
+            message="JT123456781",
             language="zh-CN",
         )
     )
@@ -151,7 +161,10 @@ async def test_model_router_receives_recent_user_and_assistant_messages(containe
 
 
 async def test_regex_waybill_survives_when_model_omits_it(container) -> None:
+    calls: list[str] = []
+
     async def model_router(message, state, context):  # type: ignore[no-untyped-def]
+        calls.append(message)
         return RouteDecision(intent=Intent.TRACKING, language="zh", explicit_intent=True)
 
     container.settings.model_routing_mode = "new_scene"
@@ -167,3 +180,4 @@ async def test_regex_waybill_survives_when_model_omits_it(container) -> None:
 
     assert response.status == SceneStatus.COMPLETED
     assert response.data["waybill_no"] == "JT123456781"
+    assert calls == ["麻烦看看 JT123456781 到哪了"]

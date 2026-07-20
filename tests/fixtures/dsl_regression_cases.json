@@ -3,7 +3,8 @@
     "name": "track_normal",
     "messages": ["帮我查快递", "JT123456781"],
     "expected_intent": "tracking",
-    "expected_status": "completed"
+    "expected_status": "completed",
+    "expected_reply_contains": ["JT123456781", "上海转运中心"]
   },
   {
     "name": "track_missing_waybill",
@@ -21,13 +22,15 @@
     "name": "delivery_followup",
     "messages": ["催件 JT123456787", "确认"],
     "expected_intent": "delivery_followup",
-    "expected_status": "completed"
+    "expected_status": "completed",
+    "expected_reply_contains": ["工单号"]
   },
   {
     "name": "delivered_not_received",
     "messages": ["显示签收但没收到", "JT123456785", "1234", "确认"],
     "expected_intent": "delivered_not_received",
-    "expected_status": "completed"
+    "expected_status": "completed",
+    "expected_reply_contains": ["工单"]
   },
   {
     "name": "change_address_cancel",
@@ -44,7 +47,8 @@
     "name": "faq",
     "messages": ["液体能不能寄？"],
     "expected_intent": "faq",
-    "expected_status": "completed"
+    "expected_status": "completed",
+    "expected_reply_contains": ["液体"]
   },
   {
     "name": "fallback",
@@ -55,6 +59,22 @@
   {
     "name": "human_transfer",
     "messages": ["我要人工客服"],
-    "expected_status": "transfer"
+    "expected_status": "transfer",
+    "expected_reply_contains": ["人工"]
+  },
+  {
+    "name": "contextual_delivery_followup",
+    "messages": ["查快递 JT123456783", "怎么这么慢"],
+    "expected_intent": "delivery_followup",
+    "expected_status": "waiting_confirmation",
+    "expected_action": "confirm_action",
+    "expected_reply_contains": ["JT123456783", "目的地派送网点", "确认"]
+  },
+  {
+    "name": "multi_intent_shared_waybill",
+    "messages": ["我要查快递和改地址", "JT1234567890123"],
+    "expected_intent": "change_address",
+    "expected_status": "completed",
+    "expected_reply_contains": ["JT1234567890123", "改址"]
   }
 ]
