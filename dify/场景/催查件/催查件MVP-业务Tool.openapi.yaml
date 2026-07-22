@@ -1,0 +1,130 @@
+openapi: 3.0.3
+info:
+  title: 催查件 MVP 业务 Tool
+  version: 0.1.0
+  description: 建议的场景级适配层契约；服务实现完成后可导入 Π/Dify 自定义 Tool。
+servers:
+  - url: https://replace-with-internal-tool-gateway.example
+    description: 待替换为内部 Tool 网关
+security:
+  - bearerAuth: []
+paths:
+  /customer-service-tools/expedite/snapshot:
+    post:
+      operationId: query_expedite_snapshot
+      summary: 查询催查件快照
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SnapshotRequest'
+      responses:
+        '200':
+          description: 标准化查询结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SnapshotResponse'
+  /customer-service-tools/expedite/work-orders:
+    post:
+      operationId: create_expedite_work_order
+      summary: 创建催查件工单
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWorkOrderRequest'
+      responses:
+        '200':
+          description: 工单创建结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateWorkOrderResponse'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    SnapshotRequest:
+      type: object
+      required: [waybillNo]
+      properties:
+        waybillNo:
+          type: string
+          maxLength: 30
+        requestId:
+          type: string
+          maxLength: 128
+    LatestTrack:
+      type: object
+      properties:
+        rawStatus: {type: string}
+        scanTime: {type: string}
+        scanTypeName: {type: string}
+        networkCode: {type: string}
+        networkName: {type: string}
+        customerTracking: {type: string}
+    SnapshotResponse:
+      type: object
+      required: [success, statusCode, waybillNo, retryable]
+      properties:
+        success: {type: boolean}
+        statusCode:
+          type: string
+          enum: [INVALID_WAYBILL, TRACK_EMPTY, IN_TRANSIT, OUT_FOR_DELIVERY, SELF_PICKUP, SIGNED, UNKNOWN, SYSTEM_ERROR]
+        waybillNo: {type: string}
+        latestTrack:
+          $ref: '#/components/schemas/LatestTrack'
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/LatestTrack'
+        cardData:
+          type: object
+          additionalProperties: true
+        errorCode:
+          type: string
+          nullable: true
+        retryable: {type: boolean}
+        traceId: {type: string}
+    CreateWorkOrderRequest:
+      type: object
+      required: [waybillNo, customerPhone, problemDescription, conversationId, requestId]
+      properties:
+        waybillNo:
+          type: string
+          maxLength: 30
+        customerPhone:
+          type: string
+          maxLength: 15
+        problemDescription:
+          type: string
+          maxLength: 500
+        conversationId:
+          type: string
+          maxLength: 128
+        requestId:
+          type: string
+          maxLength: 128
+    CreateWorkOrderResponse:
+      type: object
+      required: [success, status, requestId, retryable]
+      properties:
+        success: {type: boolean}
+        status:
+          type: string
+          enum: [SUCCESS, FAILED]
+        requestId: {type: string}
+        workOrderId:
+          type: string
+          nullable: true
+        message: {type: string}
+        errorCode:
+          type: string
+          nullable: true
+        retryable: {type: boolean}
+        traceId: {type: string}
