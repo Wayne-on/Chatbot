@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -16,6 +17,12 @@ WEB_ROOT = Path(__file__).resolve().parent / "web"
 
 def create_app(container: Container | None = None) -> FastAPI:
     container = container or build_container()
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        yield
+        await container.spike_service.shutdown()
+
     logging.basicConfig(
         level=getattr(logging, container.settings.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
@@ -24,6 +31,7 @@ def create_app(container: Container | None = None) -> FastAPI:
         title="Logistics Customer Service DeepAgent",
         version="0.1.0",
         description="Trilingual stateful customer-service demo migrated from Dify.",
+        lifespan=lifespan,
     )
     app.state.container = container
     app.add_middleware(TraceLoggingMiddleware)

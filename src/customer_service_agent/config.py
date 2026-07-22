@@ -26,6 +26,14 @@ class Settings(BaseSettings):
     model_thinking_enabled: bool = False
     model_routing_mode: Literal["ambiguous_only", "new_scene"] = "ambiguous_only"
 
+    spike_enabled: bool = True
+    spike_task_timeout_seconds: float = Field(default=180.0, ge=15.0, le=600.0)
+    spike_max_concurrency: int = Field(default=2, ge=1, le=10)
+    spike_max_active_runs: int = Field(default=4, ge=1, le=20)
+    spike_max_stored_runs: int = Field(default=50, ge=5, le=500)
+    spike_run_ttl_seconds: int = Field(default=3600, ge=300, le=86400)
+    spike_recursion_limit: int = Field(default=50, ge=10, le=100)
+
     business_backend: Literal["mock", "http"] = "mock"
     business_api_base_url: str | None = None
     business_service_token: SecretStr | None = None

@@ -11,6 +11,7 @@ from customer_service_agent.router import Router
 from customer_service_agent.services.conversation_service import ConversationService
 from customer_service_agent.services.response_service import ResponseService
 from customer_service_agent.services.scene_manager import SceneManager
+from customer_service_agent.spike.service import DeepAgentsSpikeService
 from customer_service_agent.state import InMemoryConversationCheckpointer
 from customer_service_agent.tools.service import BusinessTools
 
@@ -22,6 +23,7 @@ class Container:
     tools: BusinessTools
     checkpointer: InMemoryConversationCheckpointer
     agent: CustomerServiceAgent
+    spike_service: DeepAgentsSpikeService
 
 
 def build_container(
@@ -49,10 +51,18 @@ def build_container(
         scenes=SceneManager(),
     )
     agent = CustomerServiceAgent(service=service, settings=settings, tools=tools)
+    # The framework Spike is intentionally demo-only. Even when the stable chat uses the
+    # HTTP adapter, Spike writes must stay inside deterministic local Mock systems.
+    spike_service = DeepAgentsSpikeService(
+        settings=settings,
+        business_tools=BusinessTools(MockBackend()),
+        model=agent.response_model,
+    )
     return Container(
         settings=settings,
         backend=backend,
         tools=tools,
         checkpointer=checkpointer,
         agent=agent,
+        spike_service=spike_service,
     )

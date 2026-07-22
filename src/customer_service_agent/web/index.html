@@ -32,64 +32,91 @@
           <div class="runtime-tags" aria-label="运行模式">
             <span>DeepAgent 路由</span>
             <span>Mock Tools</span>
+            <span>Long-task HITL</span>
           </div>
         </div>
 
-        <section class="sidebar-section" aria-labelledby="scenarioTitle">
-          <div class="section-heading">
-            <p class="eyebrow">QUICK START</p>
-            <h2 id="scenarioTitle">选择测试场景</h2>
-          </div>
-          <div class="scenario-list">
-            <button class="scenario-button" data-prompt="帮我查一下快递" type="button">
-              <span class="scenario-icon" aria-hidden="true">查</span>
-              <span><strong>查询物流轨迹</strong><small>测试普通查件流程</small></span>
-            </button>
-            <button
-              class="scenario-button"
-              data-prompt="我的快递显示签收了，但是我没有收到"
-              type="button"
-            >
-              <span class="scenario-icon" aria-hidden="true">签</span>
-              <span><strong>签收未收到</strong><small>测试身份校验与投诉确认</small></span>
-            </button>
-            <button
-              class="scenario-button"
-              data-prompt="这个件都到我们市里两天了，怎么还没人送？"
-              type="button"
-            >
-              <span class="scenario-icon" aria-hidden="true">催</span>
-              <span><strong>催促派送</strong><small>测试复杂语义理解</small></span>
-            </button>
-            <button class="scenario-button" data-prompt="我想修改收货地址" type="button">
-              <span class="scenario-icon" aria-hidden="true">址</span>
-              <span><strong>修改地址</strong><small>测试高风险操作确认</small></span>
-            </button>
-            <button
-              class="scenario-button"
-              data-prompt="Chất lỏng có được phép gửi không?"
-              data-language="vi"
-              type="button"
-            >
-              <span class="scenario-icon" aria-hidden="true">VI</span>
-              <span><strong>越南语 FAQ</strong><small>测试三语识别与政策回复</small></span>
-            </button>
-          </div>
-        </section>
+        <div class="sidebar-scroll">
+          <section class="sidebar-section" aria-labelledby="scenarioTitle">
+            <div class="section-heading">
+              <p class="eyebrow">QUICK START</p>
+              <h2 id="scenarioTitle">选择测试场景</h2>
+            </div>
+            <div class="scenario-list">
+              <button class="scenario-button" data-prompt="帮我查一下快递" type="button">
+                <span class="scenario-icon" aria-hidden="true">查</span>
+                <span><strong>查询物流轨迹</strong><small>测试普通查件流程</small></span>
+              </button>
+              <button
+                class="scenario-button"
+                data-prompt="我的快递显示签收了，但是我没有收到"
+                type="button"
+              >
+                <span class="scenario-icon" aria-hidden="true">签</span>
+                <span><strong>签收未收到</strong><small>测试身份校验与投诉确认</small></span>
+              </button>
+              <button
+                class="scenario-button"
+                data-prompt="这个件都到我们市里两天了，怎么还没人送？"
+                type="button"
+              >
+                <span class="scenario-icon" aria-hidden="true">催</span>
+                <span><strong>催促派送</strong><small>测试复杂语义理解</small></span>
+              </button>
+              <button class="scenario-button" data-prompt="我想修改收货地址" type="button">
+                <span class="scenario-icon" aria-hidden="true">址</span>
+                <span><strong>修改地址</strong><small>测试高风险操作确认</small></span>
+              </button>
+              <button
+                class="scenario-button"
+                data-prompt="Chất lỏng có được phép gửi không?"
+                data-language="vi"
+                type="button"
+              >
+                <span class="scenario-icon" aria-hidden="true">VI</span>
+                <span><strong>越南语 FAQ</strong><small>测试三语识别与政策回复</small></span>
+              </button>
+            </div>
+          </section>
 
-        <section class="mock-guide" aria-labelledby="mockGuideTitle">
-          <div class="section-heading compact">
-            <p class="eyebrow">MOCK GUIDE</p>
-            <h2 id="mockGuideTitle">测试数据提示</h2>
-          </div>
-          <dl>
-            <div><dt>运输中</dt><dd>运单末位 0–2</dd></div>
-            <div><dt>派送中</dt><dd>运单末位 3–4</dd></div>
-            <div><dt>已签收</dt><dd>运单末位 5–6</dd></div>
-            <div><dt>延误</dt><dd>运单末位 7–8</dd></div>
-            <div><dt>身份通过</dt><dd>手机号后四位 1234</dd></div>
-          </dl>
-        </section>
+          <section class="sidebar-section spike-section" aria-labelledby="spikeScenarioTitle">
+            <div class="section-heading">
+              <p class="eyebrow">DEEPAGENTS · LONG TASKS</p>
+              <h2 id="spikeScenarioTitle">复杂任务能力验证</h2>
+            </div>
+            <div class="scenario-list">
+              <button
+                class="scenario-button spike-button"
+                data-spike-scenario="multi_parcel_resolution"
+                data-prompt="订单 ORD-DA-001 拆成了几个包裹。我搬家了：能改址的改到新地址，延误的帮我催，显示签收但没收到的帮我调查，正在派送的尽量放到网点。我可以稍后补地址和手机号。"
+                type="button"
+              >
+                <span class="scenario-icon spike-icon" aria-hidden="true">研</span>
+                <span><strong>一单四件综合调查</strong><small>多系统、子 Agent、统一确认</small></span>
+              </button>
+              <button
+                class="scenario-button spike-button"
+                data-spike-scenario="crossborder_customs"
+                data-prompt="跨境件 CB-VN-CN-001 被海关扣住，里面有护肤液、两块锂电池和咖啡。发票已经有了，其他材料我晚点补。补材料总费用不超过 500000 VND 就继续寄，否则退回。"
+                type="button"
+              >
+                <span class="scenario-icon spike-icon" aria-hidden="true">关</span>
+                <span><strong>跨境海关异常处理</strong><small>补件、合规审批、动态重规划</small></span>
+              </button>
+            </div>
+          </section>
+
+          <details class="mock-guide">
+            <summary><span>Mock 测试数据</span><small>点击展开</small></summary>
+            <dl>
+              <div><dt>运输中</dt><dd>运单末位 0–2</dd></div>
+              <div><dt>派送中</dt><dd>运单末位 3–4</dd></div>
+              <div><dt>已签收</dt><dd>运单末位 5–6</dd></div>
+              <div><dt>延误</dt><dd>运单末位 7–8</dd></div>
+              <div><dt>身份通过</dt><dd>手机号后四位 1234</dd></div>
+            </dl>
+          </details>
+        </div>
       </aside>
 
       <main class="chat-panel">
@@ -137,6 +164,38 @@
           <div class="session-label" id="sessionLabel" title="当前 Session ID"></div>
         </section>
 
+        <section class="spike-runtime" id="spikeRuntime" aria-labelledby="spikeRuntimeTitle" hidden>
+          <div class="spike-runtime-header">
+            <div>
+              <p class="eyebrow">AGENT RUNTIME</p>
+              <h3 id="spikeRuntimeTitle">DeepAgents 长任务</h3>
+            </div>
+            <div class="spike-runtime-actions">
+              <span class="run-badge" id="spikeRunBadge" data-status="queued">排队中</span>
+              <button class="text-button" id="cancelSpikeButton" type="button">取消任务</button>
+            </div>
+          </div>
+          <div class="spike-runtime-grid">
+            <div class="plan-card">
+              <div class="card-title-row">
+                <strong>Agent Plan</strong>
+                <span id="spikeProgressLabel">等待规划</span>
+              </div>
+              <ol class="plan-list" id="spikePlanList"></ol>
+            </div>
+            <div class="timeline-card">
+              <div class="card-title-row">
+                <strong>执行证据</strong>
+                <span id="spikeEventCount">0 个事件</span>
+              </div>
+              <div class="runtime-timeline" id="spikeTimeline"></div>
+            </div>
+          </div>
+          <p class="spike-disclaimer">
+            Spike 使用进程内 Run Store 与 Checkpointer；用于验证 Agent 长任务能力，不代表生产持久化方案。
+          </p>
+        </section>
+
         <section class="messages" id="messages" aria-live="polite" aria-label="聊天消息">
           <div class="date-divider"><span>今天</span></div>
           <article class="message assistant-message">
@@ -182,7 +241,7 @@
     <dialog class="data-dialog" id="dataDialog" aria-labelledby="dataDialogTitle">
       <div class="dialog-header">
         <div>
-          <p class="eyebrow">TOOL RESULT</p>
+          <p class="eyebrow">RUNTIME EVIDENCE</p>
           <h2 id="dataDialogTitle">本轮业务数据</h2>
         </div>
         <button type="button" id="closeDialogButton" aria-label="关闭详情">×</button>

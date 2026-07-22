@@ -16,6 +16,7 @@
 - 受控多意图：主意图 + 最多三个待办意图、共享运单号、只读任务顺序合并、写任务分别确认
 - 模型断网自动降级与短暂熔断、会话隔离、显式状态、写操作审计、敏感字段防泄漏
 - Mock/HTTP Backend 互换边界
+- 隔离的 DeepAgents 长任务 Spike：原生 Todo、渐进 Skill、专业子 Agent、多 Tool 循环和人工中断恢复
 - 单元测试、多轮测试、API 测试和 DSL 回归案例
 
 ## 环境
@@ -53,7 +54,7 @@ curl http://127.0.0.1:8000/ready
 http://127.0.0.1:8000/
 ```
 
-页面内置查件、签收未收到、催件、改址和越南语 FAQ 快捷场景，也会根据当前步骤显示测试运单号、手机号和确认按钮。开发接口文档仍位于 `http://127.0.0.1:8000/docs`。
+页面内置查件、签收未收到、催件、改址和越南语 FAQ 快捷场景，也会根据当前步骤显示测试运单号、手机号和确认按钮。侧栏的 `DEEPAGENTS SPIKE` 另外提供两个复杂长任务，界面会持续显示动态 Plan、Tool 证据、暂停点和恢复过程。开发接口文档仍位于 `http://127.0.0.1:8000/docs`。
 
 聊天示例：
 
@@ -70,6 +71,17 @@ curl -X POST http://127.0.0.1:8000/v1/chat \
 ```
 
 继续同一业务流程必须复用同一个 `session_id`。`user_credential` 只传给本轮 Adapter，不进入状态、Prompt、日志或响应。
+
+## DeepAgents 长任务 Spike
+
+Spike 与稳定客服 `/v1/chat` 完全隔离，只验证 DeepAgents 擅长的复杂任务：
+
+1. `ORD-DA-001` 一单四件综合处理：Agent 调查四票不同状态，一次收集共享地址和手机号，分别规划改址、催派、签收未收到调查与网点暂存，所有写操作统一暂停等待确认。
+2. `CB-VN-CN-001` 跨境海关异常：Agent 查询申报、版本化 Mock 政策、材料和报价，等待用户补件、模拟合规审批，再按 `500000 VND` 预算选择提交材料或重新规划退回。
+
+两条路径真实启用 DeepAgents `write_todos`、SkillsMiddleware、专业子 Agent、业务 Tool Loop、LangGraph Checkpoint 和 Human-in-the-loop。当前 Run Store 与 Checkpointer 都是进程内实现，适合框架 Spike；服务重启恢复、分布式 Worker 和生产审计需要后续替换为持久化运行基础设施。
+
+Spike 始终使用隔离的确定性 `MockBackend`，即使稳定客服配置为 `BUSINESS_BACKEND=http`，也不会把案例中的测试身份或审批动作发送到真实业务系统。Runtime 对活动任务数、内存记录数和记录 TTL 设有本地保护，测试页还会在同一浏览器标签刷新后恢复当前 Run；这些仍只是 Demo 护栏，Run API 不应直接作为生产鉴权、分布式并发和审计存储方案。
 
 ## 测试和质量检查
 

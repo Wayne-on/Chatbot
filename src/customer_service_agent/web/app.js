@@ -1,6 +1,8 @@
 (() => {
   "use strict";
 
+  const SPIKE_STORAGE_KEY = "deepagents-spike-active-run";
+
   const elements = {
     messages: document.querySelector("#messages"),
     messageInput: document.querySelector("#messageInput"),
@@ -19,6 +21,14 @@
     dataDialog: document.querySelector("#dataDialog"),
     dataContent: document.querySelector("#dataContent"),
     closeDialogButton: document.querySelector("#closeDialogButton"),
+    spikeRuntime: document.querySelector("#spikeRuntime"),
+    spikeRuntimeTitle: document.querySelector("#spikeRuntimeTitle"),
+    spikeRunBadge: document.querySelector("#spikeRunBadge"),
+    spikeProgressLabel: document.querySelector("#spikeProgressLabel"),
+    spikeEventCount: document.querySelector("#spikeEventCount"),
+    spikePlanList: document.querySelector("#spikePlanList"),
+    spikeTimeline: document.querySelector("#spikeTimeline"),
+    cancelSpikeButton: document.querySelector("#cancelSpikeButton"),
   };
 
   const labels = {
@@ -33,6 +43,8 @@
       faq: "政策咨询",
       conversation: "上下文对话",
       fallback: "等待澄清",
+      multi_parcel_resolution: "一单多包裹调查",
+      crossborder_customs: "跨境海关调查",
     },
     steps: {
       waiting_intent: "等待说明问题",
@@ -47,6 +59,7 @@
       human_queue: "人工队列",
       completed: "处理完成",
       action_cancelled: "操作已取消",
+      agent_planning: "Agent 规划与执行",
     },
     statuses: {
       idle: "空闲",
@@ -58,6 +71,15 @@
       transfer: "转人工",
       cancelled: "已取消",
     },
+    spikeStatuses: {
+      queued: "排队中",
+      running: "执行中",
+      waiting_input: "等待补充信息",
+      waiting_approval: "等待确认",
+      completed: "已完成",
+      failed: "失败",
+      cancelled: "已取消",
+    },
   };
 
   const state = {
@@ -66,6 +88,14 @@
     language: "zh-CN",
     busy: false,
     composing: false,
+    mode: "chat",
+    spikeRunId: null,
+    spikeAccessToken: null,
+    spikeStatus: null,
+    spikeCheckpointVersion: 0,
+    spikePollTimer: null,
+    spikeCheckpointAnnounced: 0,
+    spikeTerminalAnnounced: null,
   };
 
   function createSessionId() {
@@ -88,6 +118,59 @@
   function updateSessionLabel() {
     elements.sessionLabel.textContent = `SESSION  ${shortSessionId(state.sessionId)}`;
     elements.sessionLabel.title = state.sessionId;
+  }
+
+  function persistSpikeRun() {
+    if (!state.spikeRunId || !state.spikeAccessToken) return;
+    try {
+      sessionStorage.setItem(
+        SPIKE_STORAGE_KEY,
+        JSON.stringify({
+          runId: state.spikeRunId,
+          accessToken: state.spikeAccessToken,
+          sessionId: state.sessionId,
+        }),
+      );
+    } catch {
+      // Session restoration is a Demo convenience; the active Run itself is unaffected.
+    }
+  }
+
+  function clearStoredSpikeRun() {
+    try {
+      sessionStorage.removeItem(SPIKE_STORAGE_KEY);
+    } catch {
+      // Ignore browsers that disable session storage.
+    }
+  }
+
+  function restoreStoredSpikeRun() {
+    try {
+      const raw = sessionStorage.getItem(SPIKE_STORAGE_KEY);
+      if (!raw) return false;
+      const stored = JSON.parse(raw);
+      if (!stored.runId || !stored.accessToken || !stored.sessionId) {
+        clearStoredSpikeRun();
+        return false;
+      }
+      state.mode = "spike";
+      state.spikeRunId = stored.runId;
+      state.spikeAccessToken = stored.accessToken;
+      state.spikeStatus = "queued";
+      state.sessionId = stored.sessionId;
+      elements.spikeRuntime.hidden = false;
+      elements.spikeRuntimeTitle.textContent = "正在恢复 DeepAgents 长任务";
+      const divider = createElement("div", "date-divider");
+      divider.append(createElement("span", "", "恢复 DeepAgents Spike"));
+      elements.messages.append(divider);
+      addMessage("assistant", "已从当前浏览器标签恢复长任务标识，正在重新加载 Plan 和执行时间线。");
+      updateSessionLabel();
+      pollSpikeRun();
+      return true;
+    } catch {
+      clearStoredSpikeRun();
+      return false;
+    }
   }
 
   function setStateDisplay(response = {}) {
@@ -169,7 +252,13 @@
       options.quickReplies.forEach((reply) => {
         const button = createElement("button", "quick-reply", reply.label);
         button.type = "button";
-        button.addEventListener("click", () => sendMessage(reply.value));
+        button.addEventListener("click", () => {
+          if (reply.spikeDecision) {
+            resumeSpikeRun(reply.spikeDecision, reply.value || "");
+          } else {
+            sendMessage(reply.value);
+          }
+        });
         replies.append(button);
       });
       column.append(replies);
@@ -255,9 +344,313 @@
     elements.errorBanner.hidden = true;
   }
 
+  function stopSpikePolling() {
+    if (state.spikePollTimer) {
+      clearTimeout(state.spikePollTimer);
+      state.spikePollTimer = null;
+    }
+  }
+
+  function setSpikeInteraction(status) {
+    const running = status === "queued" || status === "running";
+    const waitingInput = status === "waiting_input";
+    const waitingApproval = status === "waiting_approval";
+    setBusy(running);
+    if (waitingInput || waitingApproval) {
+      setBusy(false);
+      elements.messageInput.disabled = waitingApproval;
+      elements.sendButton.disabled = waitingApproval;
+      document.querySelectorAll(".scenario-button").forEach((button) => {
+        button.disabled = true;
+      });
+    }
+    if (!running && !waitingInput && !waitingApproval) {
+      setBusy(false);
+    }
+    elements.cancelSpikeButton.disabled = !running && !waitingInput && !waitingApproval;
+  }
+
+  function spikeQuickReplies(snapshot) {
+    const actions = snapshot.pending_action?.actions || [];
+    const names = actions.map((item) => item.name);
+    if (snapshot.status === "waiting_approval") {
+      return [
+        { label: "批准并继续", value: "确认执行", spikeDecision: "approve" },
+        { label: "拒绝并重规划", value: "拒绝本次操作", spikeDecision: "reject" },
+      ];
+    }
+    if (snapshot.status !== "waiting_input") return [];
+    if (names.includes("request_compliance_decision")) {
+      return [
+        { label: "模拟合规批准", value: "合规批准", spikeDecision: "respond" },
+        { label: "模拟合规拒绝", value: "合规拒绝", spikeDecision: "respond" },
+      ];
+    }
+    if (snapshot.scenario === "crossborder_customs") {
+      return [
+        {
+          label: "上传有效材料包",
+          value: "我补充材料 DOC-BAT-VALID 和 DOC-LIQ-VALID，请连同已有 DOC-INVOICE-001 一起检查",
+          spikeDecision: "respond",
+        },
+        {
+          label: "上传过期电池报告",
+          value: "我只有 DOC-BAT-EXPIRED 和 DOC-LIQ-VALID，请连同已有 DOC-INVOICE-001 一起检查；没有其他有效电池报告，如果不通过就按原条件退回",
+          spikeDecision: "respond",
+        },
+      ];
+    }
+    return [
+      {
+        label: "补充测试地址和手机号",
+        value: "新地址是 123 Nguyen Hue Street, District 1，手机号后四位 1234",
+        spikeDecision: "respond",
+      },
+    ];
+  }
+
+  function renderSpikePlan(plan = []) {
+    elements.spikePlanList.innerHTML = "";
+    if (!plan.length) {
+      const item = createElement("li", "", "DeepAgent 正在生成动态计划…");
+      item.dataset.status = "in_progress";
+      elements.spikePlanList.append(item);
+      elements.spikeProgressLabel.textContent = "规划中";
+      return;
+    }
+    let completed = 0;
+    plan.forEach((step) => {
+      const item = createElement("li", "", step.content);
+      item.dataset.status = step.status;
+      if (step.status === "completed") completed += 1;
+      elements.spikePlanList.append(item);
+    });
+    elements.spikeProgressLabel.textContent = `已完成 ${completed}/${plan.length} 步`;
+  }
+
+  function renderSpikeTimeline(events = []) {
+    elements.spikeTimeline.innerHTML = "";
+    events.slice(-40).forEach((event) => {
+      const row = createElement("div", "timeline-event");
+      row.dataset.source = event.source;
+      row.dataset.status = event.status;
+      const dot = document.createElement("i");
+      dot.setAttribute("aria-hidden", "true");
+      const title = createElement("span", "", event.title);
+      const time = createElement(
+        "time",
+        "",
+        new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }).format(
+          new Date(event.occurred_at),
+        ),
+      );
+      row.title = JSON.stringify(event.safe_data || {}, null, 2);
+      row.append(dot, title, time);
+      elements.spikeTimeline.append(row);
+    });
+    elements.spikeEventCount.textContent = `${events.length} 个事件`;
+    elements.spikeTimeline.scrollTop = elements.spikeTimeline.scrollHeight;
+  }
+
+  function renderSpikeSnapshot(snapshot) {
+    state.spikeStatus = snapshot.status;
+    state.spikeCheckpointVersion = snapshot.checkpoint_version;
+    elements.spikeRuntime.hidden = false;
+    elements.spikeRuntimeTitle.textContent = snapshot.scenario_title;
+    elements.spikeRunBadge.textContent = labels.spikeStatuses[snapshot.status] || snapshot.status;
+    elements.spikeRunBadge.dataset.status = snapshot.status;
+    renderSpikePlan(snapshot.plan);
+    renderSpikeTimeline(snapshot.events);
+    setSpikeInteraction(snapshot.status);
+
+    elements.intentValue.textContent = labels.intents[snapshot.scenario] || snapshot.scenario_title;
+    elements.stepValue.textContent = "Agent 规划与执行";
+    elements.statusValue.textContent = labels.spikeStatuses[snapshot.status] || snapshot.status;
+    elements.statusValue.dataset.status =
+      snapshot.status === "waiting_input" || snapshot.status === "waiting_approval"
+        ? "waiting_confirmation"
+        : snapshot.status;
+
+    const details = {
+      run_id: snapshot.run_id,
+      plan: snapshot.plan,
+      events: snapshot.events,
+      pending_action: snapshot.pending_action,
+      result: snapshot.result,
+      trace_id: snapshot.trace_id,
+    };
+    if (
+      (snapshot.status === "waiting_input" || snapshot.status === "waiting_approval") &&
+      snapshot.checkpoint_version > state.spikeCheckpointAnnounced
+    ) {
+      state.spikeCheckpointAnnounced = snapshot.checkpoint_version;
+      addMessage("assistant", snapshot.reply || snapshot.pending_action?.prompt || "任务已暂停。", {
+        data: details,
+        quickReplies: spikeQuickReplies(snapshot),
+      });
+    }
+    if (
+      ["completed", "failed", "cancelled"].includes(snapshot.status) &&
+      state.spikeTerminalAnnounced !== snapshot.status
+    ) {
+      state.spikeTerminalAnnounced = snapshot.status;
+      addMessage("assistant", snapshot.reply || "长任务已结束。", { data: details });
+      state.mode = "chat";
+      stopSpikePolling();
+      clearStoredSpikeRun();
+    }
+  }
+
+  async function fetchSpikeSnapshot() {
+    if (!state.spikeRunId || !state.spikeAccessToken) return null;
+    const response = await fetch(`/v1/deep-agent/runs/${encodeURIComponent(state.spikeRunId)}`, {
+      headers: { "X-Spike-Access-Token": state.spikeAccessToken },
+      cache: "no-store",
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
+    return payload;
+  }
+
+  async function pollSpikeRun() {
+    stopSpikePolling();
+    try {
+      const snapshot = await fetchSpikeSnapshot();
+      if (!snapshot) return;
+      renderSpikeSnapshot(snapshot);
+      if (["queued", "running"].includes(snapshot.status)) {
+        state.spikePollTimer = setTimeout(pollSpikeRun, 850);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "未知错误";
+      showError(`无法读取长任务状态：${message}`);
+      state.spikePollTimer = setTimeout(pollSpikeRun, 1800);
+    }
+  }
+
+  async function startSpikeRun(scenario, prompt) {
+    if (state.busy) return;
+    stopSpikePolling();
+    clearStoredSpikeRun();
+    hideError();
+    state.mode = "spike";
+    state.spikeRunId = null;
+    state.spikeAccessToken = null;
+    state.spikeStatus = "queued";
+    state.spikeCheckpointVersion = 0;
+    state.spikeCheckpointAnnounced = 0;
+    state.spikeTerminalAnnounced = null;
+    state.sessionId = createSessionId();
+    updateSessionLabel();
+    elements.messages.innerHTML = "";
+    const divider = createElement("div", "date-divider");
+    divider.append(createElement("span", "", "DeepAgents Spike"));
+    elements.messages.append(divider);
+    addMessage("user", prompt);
+    elements.spikeRuntime.hidden = false;
+    elements.spikeRuntimeTitle.textContent = labels.intents[scenario] || "DeepAgents 长任务";
+    renderSpikePlan([]);
+    renderSpikeTimeline([]);
+    setBusy(true);
+    const typing = addTypingIndicator();
+
+    try {
+      const response = await fetch("/v1/deep-agent/runs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: state.sessionId,
+          user_id: state.userId,
+          scenario,
+          message: prompt,
+          language: state.language,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
+      state.spikeRunId = payload.run_id;
+      state.spikeAccessToken = payload.access_token;
+      persistSpikeRun();
+      typing.remove();
+      addMessage(
+        "assistant",
+        "长任务已经进入独立 DeepAgents Runtime。执行计划、子 Agent 调查和 Tool 证据会显示在上方；需要资料或确认时任务会安全暂停。",
+      );
+      pollSpikeRun();
+    } catch (error) {
+      typing.remove();
+      state.mode = "chat";
+      setBusy(false);
+      const message = error instanceof Error ? error.message : "未知错误";
+      showError(`无法创建 DeepAgents 长任务：${message}`);
+      addMessage("assistant", "长任务没有创建成功，请检查模型和本地服务配置后，再从左侧选择案例。");
+    }
+  }
+
+  async function resumeSpikeRun(decision, message = "") {
+    if (!state.spikeRunId || !state.spikeAccessToken || state.busy) return;
+    const display =
+      decision === "approve" ? "确认执行这些操作" : decision === "reject" ? "拒绝，请重新规划" : message;
+    addMessage("user", display);
+    hideError();
+    setBusy(true);
+    const typing = addTypingIndicator();
+    try {
+      const response = await fetch(
+        `/v1/deep-agent/runs/${encodeURIComponent(state.spikeRunId)}/resume`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            access_token: state.spikeAccessToken,
+            checkpoint_version: state.spikeCheckpointVersion,
+            decision,
+            message: decision === "approve" ? null : message || null,
+          }),
+        },
+      );
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
+      typing.remove();
+      renderSpikeSnapshot(payload);
+      pollSpikeRun();
+    } catch (error) {
+      typing.remove();
+      setBusy(false);
+      const errorMessage = error instanceof Error ? error.message : "未知错误";
+      showError(`无法恢复长任务：${errorMessage}`);
+    }
+  }
+
+  async function cancelSpikeRun() {
+    if (!state.spikeRunId || !state.spikeAccessToken) return;
+    stopSpikePolling();
+    try {
+      const response = await fetch(`/v1/deep-agent/runs/${encodeURIComponent(state.spikeRunId)}`, {
+        method: "DELETE",
+        headers: { "X-Spike-Access-Token": state.spikeAccessToken },
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
+      renderSpikeSnapshot(payload);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "未知错误";
+      showError(`无法取消长任务：${message}`);
+    }
+  }
+
   async function sendMessage(message) {
     const value = (message ?? elements.messageInput.value).trim();
     if (!value || state.busy) return;
+
+    if (state.mode === "spike") {
+      if (state.spikeStatus === "waiting_input") {
+        elements.messageInput.value = "";
+        resizeTextarea();
+        await resumeSpikeRun("respond", value);
+      }
+      return;
+    }
 
     hideError();
     addMessage("user", value);
@@ -308,7 +701,23 @@
     elements.messageInput.style.height = `${Math.min(elements.messageInput.scrollHeight, 130)}px`;
   }
 
-  function resetConversation() {
+  async function resetConversation() {
+    if (
+      state.spikeRunId &&
+      ["queued", "running", "waiting_input", "waiting_approval"].includes(state.spikeStatus)
+    ) {
+      await cancelSpikeRun();
+    }
+    stopSpikePolling();
+    state.mode = "chat";
+    state.spikeRunId = null;
+    state.spikeAccessToken = null;
+    state.spikeStatus = null;
+    state.spikeCheckpointVersion = 0;
+    state.spikeCheckpointAnnounced = 0;
+    state.spikeTerminalAnnounced = null;
+    clearStoredSpikeRun();
+    elements.spikeRuntime.hidden = true;
     state.sessionId = createSessionId();
     elements.messages.innerHTML = "";
     const divider = createElement("div", "date-divider");
@@ -352,7 +761,7 @@
       sendMessage();
     }
   });
-  elements.newConversationButton.addEventListener("click", resetConversation);
+  elements.newConversationButton.addEventListener("click", () => resetConversation());
   elements.languageSelect.addEventListener("change", (event) => {
     state.language = event.target.value;
   });
@@ -361,7 +770,8 @@
   elements.dataDialog.addEventListener("click", (event) => {
     if (event.target === elements.dataDialog) elements.dataDialog.close();
   });
-  document.querySelectorAll(".scenario-button").forEach((button) => {
+  elements.cancelSpikeButton.addEventListener("click", cancelSpikeRun);
+  document.querySelectorAll(".scenario-button:not(.spike-button)").forEach((button) => {
     button.addEventListener("click", () => {
       if (button.dataset.language) {
         state.language = button.dataset.language;
@@ -370,8 +780,14 @@
       sendMessage(button.dataset.prompt || "");
     });
   });
+  document.querySelectorAll(".spike-button").forEach((button) => {
+    button.addEventListener("click", () => {
+      startSpikeRun(button.dataset.spikeScenario || "", button.dataset.prompt || "");
+    });
+  });
 
   updateSessionLabel();
   checkConnection();
+  restoreStoredSpikeRun();
   elements.messageInput.focus();
 })();
