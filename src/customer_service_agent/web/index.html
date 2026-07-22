@@ -16,7 +16,7 @@
         <div class="brand-block">
           <div class="brand-mark" aria-hidden="true">LC</div>
           <div>
-            <p class="eyebrow">DEEPAGENTS DEMO</p>
+            <p class="eyebrow">LANGGRAPH DEMO</p>
             <h1>Logistics Copilot</h1>
           </div>
         </div>
@@ -30,66 +30,66 @@
             </div>
           </div>
           <div class="runtime-tags" aria-label="运行模式">
-            <span>LangGraph 编排</span>
+            <span>StateGraph 主流程</span>
+            <span>结构化 Plan</span>
             <span>Mock Tools</span>
           </div>
         </div>
 
-        <section class="sidebar-section" aria-labelledby="scenarioTitle">
-          <div class="section-heading">
-            <p class="eyebrow">QUICK START</p>
-            <h2 id="scenarioTitle">选择测试场景</h2>
-          </div>
-          <div class="scenario-list">
-            <button class="scenario-button" data-prompt="帮我查一下快递" type="button">
-              <span class="scenario-icon" aria-hidden="true">查</span>
-              <span><strong>查询物流轨迹</strong><small>测试普通查件流程</small></span>
-            </button>
-            <button
-              class="scenario-button"
-              data-prompt="我的快递显示签收了，但是我没有收到"
-              type="button"
-            >
-              <span class="scenario-icon" aria-hidden="true">签</span>
-              <span><strong>签收未收到</strong><small>测试身份校验与投诉确认</small></span>
-            </button>
-            <button
-              class="scenario-button"
-              data-prompt="这个件都到我们市里两天了，怎么还没人送？"
-              type="button"
-            >
-              <span class="scenario-icon" aria-hidden="true">催</span>
-              <span><strong>催促派送</strong><small>测试复杂语义理解</small></span>
-            </button>
-            <button class="scenario-button" data-prompt="我想修改收货地址" type="button">
-              <span class="scenario-icon" aria-hidden="true">址</span>
-              <span><strong>修改地址</strong><small>测试高风险操作确认</small></span>
-            </button>
-            <button
-              class="scenario-button"
-              data-prompt="Chất lỏng có được phép gửi không?"
-              data-language="vi"
-              type="button"
-            >
-              <span class="scenario-icon" aria-hidden="true">VI</span>
-              <span><strong>越南语 FAQ</strong><small>测试三语识别与政策回复</small></span>
-            </button>
-          </div>
-        </section>
+        <div class="sidebar-scroll">
+          <section class="sidebar-section" aria-labelledby="scenarioTitle">
+            <div class="section-heading">
+              <p class="eyebrow">QUICK START</p>
+              <h2 id="scenarioTitle">选择测试场景</h2>
+            </div>
+            <div class="scenario-list">
+              <button class="scenario-button" data-prompt="帮我查一下快递" type="button">
+                <span class="scenario-icon" aria-hidden="true">查</span>
+                <span><strong>查询物流轨迹</strong><small>测试普通查件流程</small></span>
+              </button>
+              <button
+                class="scenario-button"
+                data-prompt="我的快递显示签收了，但是我没有收到"
+                type="button"
+              >
+                <span class="scenario-icon" aria-hidden="true">签</span>
+                <span><strong>签收未收到</strong><small>测试身份校验与投诉确认</small></span>
+              </button>
+              <button
+                class="scenario-button"
+                data-prompt="这个件都到我们市里两天了，怎么还没人送？"
+                type="button"
+              >
+                <span class="scenario-icon" aria-hidden="true">催</span>
+                <span><strong>催促派送</strong><small>测试复杂语义理解</small></span>
+              </button>
+              <button class="scenario-button" data-prompt="我想修改收货地址" type="button">
+                <span class="scenario-icon" aria-hidden="true">址</span>
+                <span><strong>修改地址</strong><small>测试高风险操作确认</small></span>
+              </button>
+              <button
+                class="scenario-button"
+                data-prompt="Chất lỏng có được phép gửi không?"
+                data-language="vi"
+                type="button"
+              >
+                <span class="scenario-icon" aria-hidden="true">VI</span>
+                <span><strong>越南语 FAQ</strong><small>测试三语识别与政策回复</small></span>
+              </button>
+            </div>
+          </section>
 
-        <section class="mock-guide" aria-labelledby="mockGuideTitle">
-          <div class="section-heading compact">
-            <p class="eyebrow">MOCK GUIDE</p>
-            <h2 id="mockGuideTitle">测试数据提示</h2>
-          </div>
-          <dl>
-            <div><dt>运输中</dt><dd>运单末位 0–2</dd></div>
-            <div><dt>派送中</dt><dd>运单末位 3–4</dd></div>
-            <div><dt>已签收</dt><dd>运单末位 5–6</dd></div>
-            <div><dt>延误</dt><dd>运单末位 7–8</dd></div>
-            <div><dt>身份通过</dt><dd>手机号后四位 1234</dd></div>
-          </dl>
-        </section>
+          <details class="mock-guide">
+            <summary><span>Mock 测试数据</span><small>点击展开</small></summary>
+            <dl>
+              <div><dt>运输中</dt><dd>运单末位 0–2</dd></div>
+              <div><dt>派送中</dt><dd>运单末位 3–4</dd></div>
+              <div><dt>已签收</dt><dd>运单末位 5–6</dd></div>
+              <div><dt>延误</dt><dd>运单末位 7–8</dd></div>
+              <div><dt>身份通过</dt><dd>手机号后四位 1234</dd></div>
+            </dl>
+          </details>
+        </div>
       </aside>
 
       <main class="chat-panel">
@@ -98,7 +98,7 @@
             <span>LC</span>
           </div>
           <div class="header-copy">
-            <p class="eyebrow">LIVE CONVERSATION</p>
+            <p class="eyebrow">LANGGRAPH · CONTROLLED AGENT</p>
             <div class="header-title-row">
               <h2>智能物流客服</h2>
               <span class="live-badge"><i aria-hidden="true"></i>在线</span>
