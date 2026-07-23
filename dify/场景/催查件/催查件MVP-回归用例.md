@@ -25,6 +25,20 @@
 | EXP-16 | JT123456799 | SYSTEM_ERROR | 明确系统异常，不得说未揽收或运单无效 |
 | EXP-17 | JT123450000 | INVALID_WAYBILL | 提示核对运单号 |
 
+`EXP-17` 还必须检查：`tool_status=business_rejected`、`success=false`、`retryable=false`、`current_step=waiting_waybill`，会话中的无效 `waybill_no` 被清空。下一轮输入正确运单号时不再调用语义模型，并继承原 `delivery_followup` 三级意图重新查询。
+
+## 2.1 三级诉求差异
+
+| 编号 | 用户输入 | 预期三级意图 | 回复边界 |
+| --- | --- | --- | --- |
+| EXP-18 | `帮我催一下 JT123456781` | `urge_delivery` | 先查快照；真实建单 Tool 未接入时明确未创建催件单 |
+| EXP-19 | `JT123456781 为什么这么慢` | `ask_delay_reason` | 只说明轨迹已返回的事实；无原因字段时不猜测天气、爆仓或网点异常 |
+| EXP-24 | `JT123456781 还要多久到` | `ask_delivery_eta` | Tool 无 ETA 时明确说暂时无法给出准确送达时间 |
+| EXP-25 | `JT123456781 物流一直没更新` | `tracking_not_updated` | 告知最新可见轨迹；没有异常阈值返回时不自动判定延误 |
+| EXP-26 | `显示自取但不是我申请的 JT123456786` | `self_pickup_not_requested` | 先查快照验证 `SELF_PICKUP`，再进入手机号、问题描述和单独确认流程 |
+
+对同一个预览运单重复查询，轨迹时间与 `tool_result` 必须保持一致，不得随调用时刻漂移。
+
 ## 3. 已代收问答与工单
 
 ### EXP-20 本人申请自取
